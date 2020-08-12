@@ -14,7 +14,7 @@ Weeks et al. [Leveraging polygenic enrichments of gene features to predict genes
 - sklearn
 
 #### Software
-- [MAGMA](https://ctg.cncr.nl/software/magma) v1.07b
+- [MAGMA](https://ctg.cncr.nl/software/magma)
 
 #### Data
 The supporting data files required to run PoPS can be downloaded [here](https://www.finucanelab.org/data).
