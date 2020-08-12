@@ -29,11 +29,11 @@ The supporting data files required to run PoPS can be downloaded [here](https://
    - A binary PLINK format data set, consisting of a .bed, .bim and .fam trio of files, is required for the reference panel.
    - The `1000G.EUR.bed/bim/fam` files contain the necessary reference panel data for Europeans in the 1000 Genomes Project.
 4. **Gene features**
-   - The first column of the gene feature file must contain gene Ensemble IDs and be labeled ENSGID. Remaining columns must have unique column names and contain gene features.
+   - The first column of the gene feature file must contain gene Ensembl IDs and be labeled ENSGID. Remaining columns must have unique column names and contain gene features.
    - We provide data for 57,543 gene features in the `POPS.features.txt.gz` file. This file contrains 40,546 features derived from gene expression data, 8,718 features extracted from a protein-protein interaction network, and 8,479 features based on pathway membership.
 5. **Control features**
    - A list of the names of control features always included in PoPS analyses.
-   - The control.features contains the names of the relevant control features for the gene features provided.
+   - The `control.features` file contains the names of the relevant control features for the gene features provided.
 6. **Summary statistics**
    - The summary statistics file must contain a column containing SNP IDs, p-values, the sample size used per SNP can be included in the analysis and be labeled SNP, P, and N.
 
@@ -44,8 +44,8 @@ The typical PoPS analysis takes GWAS summary statistics together with gene featu
 2. Select marginally associated features by performing enrichment analysis for each gene feature separately.
 3. Estimate Polygenic Priority Scores (PoP scores) by fitting a joint model for the enrichment of all selected features.
 
-### Step 1 - Compute gene assocaition statistics
-#### Inputs
+## Step 1 - Compute gene assocaition statistics
+### Inputs
 ##### `--bfile`
 This flag gives the location of the plink format file set for the reference panel described in `Data`.
 ##### `--gene_annot`
@@ -56,12 +56,12 @@ This flag gives the location of the summary statistics file described above and 
 This flag designates which model to use for computing gene association statistics. We recommend setting snp-wise=mean.
 ##### `--out`
 This flag designates the prefix for where to print the output. MAGMA will append .genes.out and .genes.raw to this prefix.
-#### Outputs
+### Outputs
 ##### `.genes.out` file
 The `.genes.out` file contains the MAGMA gene analysis results in human-readable format. This file contains the gene z-scores and relevant data to construct the control covariates in the joint prediction model.
 ##### `.genes.raw` file
 The `.genes.raw` file is the intermediary file that serves as the input for subsequent analyses. This file contains the required data to consturct the gene-gene correlation matrix.
-#### Sample command
+### Sample command
 ```
 ./magma\
 	--bfile 1000G.EUR\
@@ -72,18 +72,18 @@ The `.genes.raw` file is the intermediary file that serves as the input for subs
 ```
 For more detail, see the [MAGMA manual](https://ctg.cncr.nl/software/MAGMA/doc/manual_v1.07.pdf).
 
-### Step 2 - Select features
-#### Inputs
+## Step 2 - Select features
+### Inputs
 ##### `--features`
 This flag gives the location of the gene feature file described in `Data`.
 ##### `--gene_results`
 This flag gives the prefix for location of the gene association results from `Step 1`.
 ##### `--out`
 This flag designates the prefix for where to print the output. It will append .features to this prefix.
-#### Outputs
+### Outputs
 ##### `.features` file
 The `.features` file contains the names of the marginally selected features. This file has no header and contains the name of one feature per row.
-#### Sample command
+### Sample command
 ```
 python POPS.feature_selection.py\
 	--features POPS.features.txt.gz\
@@ -91,8 +91,8 @@ python POPS.feature_selection.py\
 	--out AFib
 ```
 
-### Step 3 - Estimate PoP scores
-#### Inputs
+## Step 3 - Estimate PoP scores
+### Inputs
 ##### `--gene_loc`
 This flag gives the location of the gene location file described in `Data`.
 #####  `--gene_results`
@@ -107,12 +107,12 @@ This flag gives the location of the list of control fetures described in `Data`.
 This flag designates the chromosome for which to compute PoP scores.
 ##### `--out`
 This flag designates the prefix for where to print the output. It will append .coefs and .results to this prefix.
-#### Outputs
+### Outputs
 ##### `.{chomosome}.results` file
 The `.results` file contains the predicted PoP scores for each gene on the designated chromosome.
 ##### `.{chomosome}.coefs` file
 The `.coefs` file contains the estimated $\hat{\Beta}$ for each feature from fitting the PoPS model leaving out the designated chromosome.
-#### Sample command
+### Sample command
 ```
 python POPS.predict_scores.py\
 	--gene_loc gene_loc.txt\
