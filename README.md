@@ -5,7 +5,7 @@ Weeks et al. [Leveraging polygenic enrichments of gene features to predict genes
 
 ## Getting started
 
-#### Dependencies
+#### Python dependencies
 - pandas
 - numpy
 - argparse
@@ -17,25 +17,25 @@ Weeks et al. [Leveraging polygenic enrichments of gene features to predict genes
 - [MAGMA](https://ctg.cncr.nl/software/magma) v1.07b
 
 #### Data
+The supporting data files required to run PoPS can be downloaded [here](https://www.finucanelab.org/data).
 1. **Gene location**
    - The gene location file must have four columns containing the gene ID, chromosome, start position and stop position, in that order. These columns should be labeled ENSGID, CHR, START, END.
-   - The data/gene_loc.txt file is a gene location file for 18,383 protein coding genes.
+   - The `gene_loc.txt` file is a gene location file for 18,383 protein coding genes.
 2. **MAGMA gene annotation**
    - The MAGMA gene annotation file is created by running MAGMA with the --annotate flag.
    - Each row of the MAGMA annotation file corresponds to a gene and containings the gene ID, a specification of the gene's location, and a list of SNP IDs of SNPs mapped to that gene.
-   - The data/magma_0kb.genes.annot file is a MAGMA annotation file for the 18,383 protein coding genes using SNPs in the 1000 Genomes EUR reference panel and a 0 Kb window around the gene body.
+   - The `magma_0kb.genes.annot` file is a MAGMA annotation file for the 18,383 protein coding genes using SNPs in the 1000 Genomes EUR reference panel and a 0 Kb window around the gene body.
 3. **Reference panel**
    - A binary PLINK format data set, consisting of a .bed, .bim and .fam trio of files, is required for the reference panel.
-   - The data/1000G.EUR.bed/bim/fam files contain the necessary reference panel data for Europeans in the 1000 Genomes Project.
+   - The `1000G.EUR.bed/bim/fam` files contain the necessary reference panel data for Europeans in the 1000 Genomes Project.
 4. **Gene features**
    - The first column of the gene feature file must contain gene Ensemble IDs and be labeled ENSGID. Remaining columns must have unique column names and contain gene features.
-   - We provide data for 57,543 gene features in the data/POPS.features.txt.gz: 40,546 derived from gene expression data, 8,718 extracted from a protein-protein interaction network, and 8,479 based on pathway membership.
+   - We provide data for 57,543 gene features in the `POPS.features.txt.gz` file. This file contrains 40,546 features derived from gene expression data, 8,718 features extracted from a protein-protein interaction network, and 8,479 features based on pathway membership.
 5. **Control features**
    - A list of the names of control features always included in PoPS analyses.
-   - The data/control.features contains the names of the relevant control features for the gene features provided.
+   - The control.features contains the names of the relevant control features for the gene features provided.
 6. **Summary statistics**
    - The summary statistics file must contain a column containing SNP IDs, p-values, the sample size used per SNP can be included in the analysis and be labeled SNP, P, and N.
-   - An example summary statistics file is provided in the examples/AFib.sumstats file.
 
 
 ## Typical analysis
