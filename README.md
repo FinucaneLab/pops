@@ -87,7 +87,7 @@ This flag designates the prefix for where to print the output. It will append .f
 The `.features` file contains the names of the marginally selected features. This file has no header and contains the name of one feature per row.
 ### Sample command
 ```
-python POPS.feature_selection.py\
+python pops.feature_selection.py\
 	--features POPS.features.txt.gz\
 	--gene_results AFib\
 	--out AFib
@@ -116,7 +116,7 @@ The `.results` file contains the predicted PoP scores for each gene on the desig
 The `.coefs` file contains the estimated $\hat{\Beta}$ for each feature from fitting the PoPS model leaving out the designated chromosome.
 ### Sample command
 ```
-python POPS.predict_scores.py\
+python pops.predict_scores.py\
 	--gene_loc gene_loc.txt\
 	--gene_results AFib\
 	--features POPS.features.txt.gz\
@@ -127,4 +127,4 @@ python POPS.predict_scores.py\
 ```
 
 ## Contact
-[Elle Weeks](eweeks@broadinstitute.org) developed and maintains this software package.
+[Elle Weeks](mailto:eweeks@broadinstitute.org) developed and maintains this software package.
