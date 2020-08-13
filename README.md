@@ -32,7 +32,7 @@ The supporting data files required to run PoPS can be downloaded [here](https://
    - The `1000G.EUR.bed/bim/fam` files contain the necessary reference panel data for Europeans in the 1000 Genomes Project.
 4. **Gene features**
    - The first column of the gene feature file must contain gene Ensembl IDs and be labeled ENSGID. Remaining columns must have unique column names and contain gene features.
-   - We provide data for 57,543 gene features in the `POPS.features.txt.gz` file. This file contrains 40,546 features derived from gene expression data, 8,718 features extracted from a protein-protein interaction network, and 8,479 features based on pathway membership.
+   - We provide data for 57,543 gene features in the `PoPS.features.txt.gz` file. This file contrains 40,546 features derived from gene expression data, 8,718 features extracted from a protein-protein interaction network, and 8,479 features based on pathway membership.
 5. **Control features**
    - A list of the names of control features always included in PoPS analyses.
    - The `control.features` file contains the names of the relevant control features for the gene features provided.
@@ -88,7 +88,7 @@ The `.features` file contains the names of the marginally selected features. Thi
 ### Sample command
 ```
 python pops.feature_selection.py\
-	--features POPS.features.txt.gz\
+	--features PoPS.features.txt.gz\
 	--gene_results AFib\
 	--out AFib
 ```
@@ -119,7 +119,7 @@ The `.coefs` file contains the estimated $\hat{\Beta}$ for each feature from fit
 python pops.predict_scores.py\
 	--gene_loc gene_loc.txt\
 	--gene_results AFib\
-	--features POPS.features.txt.gz\
+	--features PoPS.features.txt.gz\
 	--selected_features AFib.features\
 	--control_features control.features\
 	--chromosome 1\
