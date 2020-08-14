@@ -26,10 +26,10 @@ The supporting data files required to run PoPS can be downloaded [here](https://
 2. **MAGMA gene annotation**
    - The MAGMA gene annotation file is created by running MAGMA with the --annotate flag.
    - Each row of the MAGMA annotation file corresponds to a gene and containings the gene ID, a specification of the gene's location, and a list of SNP IDs of SNPs mapped to that gene.
-   - The `magma_0kb.genes.annot` file is a MAGMA annotation file for the 18,383 protein coding genes using SNPs in the 1000 Genomes EUR reference panel and a 0 Kb window around the gene body.
+   - The `magma_0kb.genes.annot` file is a MAGMA annotation file for the 18,383 protein coding genes using SNPs in the 1000 Genomes phase 3 reference panel and a 0 Kb window around the gene body.
 3. **Reference panel**
    - A binary PLINK format data set, consisting of a .bed, .bim and .fam trio of files, is required for the reference panel.
-   - The `1000G.EUR.bed/bim/fam` files contain the necessary reference panel data for Europeans in the 1000 Genomes Project.
+   - The `1000G.EUR.bed/bim/fam` files contain the necessary reference panel data for Europeans in the 1000 Genomes Project phase 3.
 4. **Gene features**
    - The first column of the gene feature file must contain gene Ensembl IDs and be labeled ENSGID. Remaining columns must have unique column names and contain gene features.
    - We provide data for 57,543 gene features in the `PoPS.features.txt.gz` file. This file contrains 40,546 features derived from gene expression data, 8,718 features extracted from a protein-protein interaction network, and 8,479 features based on pathway membership.
