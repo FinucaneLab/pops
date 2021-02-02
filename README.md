@@ -1,4 +1,4 @@
-# Polygeneic Priority Score (PoPS) v0.1
+# Polygenic Priority Score (PoPS) v0.1
 This repository contains the code and instructions for running PoPS. Please note, a more efficient version of this software is under development.
 
 PoPS is a gene prioritization method that leverages genome-wide signal from GWAS summary statistics and incorporates data from an extensive set of public bulk and single-cell expression datasets, curated biological pathways, and predicted protein-protein interactions. The PoPS method is described in detail at
