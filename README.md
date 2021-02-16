@@ -19,7 +19,7 @@ Weeks, E. M. et al. [Leveraging polygenic enrichments of gene features to predic
 - [MAGMA](https://ctg.cncr.nl/software/magma)
 
 #### Data
-The supporting data files required to run PoPS can be downloaded [here](https://www.dropbox.com/sh/dz4haeo48s34sex/AAAun_PLqCt_0Qp3x9b9tk5oa/data?dl=0&subfolder_nav_tracking=1).
+The supporting data files required to run PoPS can be downloaded [here](https://www.dropbox.com/sh/o6t5jprvxb8b500/AABDwtPv9s5Do97oPpnUNueia?dl=0).
 1. **Gene location**
    - The gene location file must have four columns containing the gene ID, chromosome, start position and stop position, in that order. These columns should be labeled ENSGID, CHR, START, END.
    - The `gene_loc.txt` file is a gene location file for 18,383 protein coding genes.
