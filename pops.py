@@ -5,8 +5,50 @@ import re
 import scipy.linalg
 import random
 import logging
+import argparse
+
 from sklearn.linear_model import LinearRegression, RidgeCV, LassoCV
 from sklearn.metrics import make_scorer
+
+### --------------------------------- PROGRAM INPUTS --------------------------------- ###
+
+def get_pops_args(argv=None):
+    parser = argparse.ArgumentParser(description='...')
+    parser.add_argument("--gene_annot_path", help="...")
+    parser.add_argument("--feature_mat_prefix", help="...")
+    parser.add_argument("--magma_prefix", help="...")
+    parser.add_argument('--use_magma_covariates', dest='use_magma_covariates', action='store_true')
+    parser.add_argument('--ignore_magma_covariates', dest='use_magma_covariates', action='store_false')
+    parser.set_defaults(use_magma_covariates=True)
+    parser.add_argument('--use_magma_error_cov', dest='use_magma_error_cov', action='store_true')
+    parser.add_argument('--ignore_magma_error_cov', dest='use_magma_error_cov', action='store_false')
+    parser.set_defaults(use_magma_error_cov=True)
+    parser.add_argument("--y_path", help="...")
+    parser.add_argument("--y_covariates_path", help="...")
+    parser.add_argument("--y_error_cov_path", help="...")
+    parser.add_argument("--project_out_covariates_chromosomes", nargs="*", help="...")
+    parser.add_argument('--project_out_covariates_remove_hla', dest='project_out_covariates_remove_hla', action='store_true')
+    parser.add_argument('--project_out_covariates_keep_hla', dest='project_out_covariates_remove_hla', action='store_false')
+    parser.set_defaults(project_out_covariates_remove_hla=True)
+    parser.add_argument("--subset_features_path", help="...")
+    parser.add_argument("--control_features_path", help="...")
+    parser.add_argument("--feature_selection_chromosomes", nargs="*", help="...")
+    parser.add_argument("--feature_selection_p_cutoff", type=float, default=0.05, help="...")
+    parser.add_argument("--feature_selection_max_num", type=int, help="...")
+    parser.add_argument('--feature_selection_remove_hla', dest='feature_selection_remove_hla', action='store_true')
+    parser.add_argument('--feature_selection_keep_hla', dest='feature_selection_remove_hla', action='store_false')
+    parser.set_defaults(feature_selection_remove_hla=True)
+    parser.add_argument("--training_chromosomes", nargs="*", help="...")
+    parser.add_argument('--training_remove_hla', dest='training_remove_hla', action='store_true')
+    parser.add_argument('--training_keep_hla', dest='training_remove_hla', action='store_false')
+    parser.set_defaults(training_remove_hla=True)
+    parser.add_argument("--method", default="ridge", help="...")
+    parser.add_argument("--out_prefix", help="...")
+    parser.add_argument("--random_seed", type=int, default=42, help="...")
+    parser.add_argument('--verbose', dest='verbose', action='store_true')
+    parser.add_argument('--no-verbose', dest='verbose', action='store_false')
+    parser.set_defaults(verbose=False)
+    return parser.parse_args(argv)
 
 
 ### --------------------------------- GENERAL --------------------------------- ###
@@ -397,37 +439,7 @@ def pops_predict(mat, rows, cols, coefs_df):
 
 ### --------------------------------- MAIN --------------------------------- ###
 
-def main():
-    ### TEMPORARY. Just defines configurations
-    working_dir = "/broad/finucanelab/ncheng/pops_jun14_2021_rev/"
-
-    tmp_chrom = [str(i) for i in range(2,23)]
-
-    config_dict = {}
-    config_dict["gene_annot_path"] = working_dir + "/data/utils/gene_annot_jun10.txt"
-    config_dict["feature_mat_prefix"] = working_dir + "/data/features/pops_features_munged/pops_features"
-    config_dict["magma_prefix"] = working_dir + "/data/magma/magma_full/zscores_dec29_rev1_PASS_Schizophrenia"
-    config_dict["use_magma_covariates"] = False
-    config_dict["use_magma_error_cov"] = False
-    config_dict["y_path"] = None
-    config_dict["y_covariates_path"] = None
-    config_dict["y_error_cov_path"] = None
-    config_dict["project_out_covariates_chromosomes"] = None #tmp_chrom
-    config_dict["project_out_covariates_remove_hla"] = True
-    config_dict["subset_features_path"] = working_dir + "/data/utils/features_jun14_rand_down_2000.txt"
-    config_dict["control_features_path"] = working_dir + "/data/utils/features_jul17_control.txt"
-    config_dict["feature_selection_chromosomes"] = None #tmp_chrom
-    config_dict["feature_selection_p_cutoff"] = 0.05
-    config_dict["feature_selection_max_num"] = None
-    config_dict["feature_selection_remove_hla"] = True
-    config_dict["training_chromosomes"] = None #tmp_chrom
-    config_dict["training_remove_hla"] = True
-    config_dict["method"] = "ridge"
-    config_dict["out_prefix"] = working_dir + "/tmp_pheno"
-    config_dict["random_seed"] = 42
-    config_dict["verbose"] = True
-    ### END TEMPORARY
-
+def main(config_dict):
     ### --------------------------------- Basic settings --------------------------------- ###
     ### Set logging settings
     if config_dict["verbose"]:
@@ -453,6 +465,10 @@ def main():
     if config_dict["training_chromosomes"] is None:
         config_dict["training_chromosomes"] = all_chromosomes
         logging.info("--training_chromosomes is None, defaulting to all chromosomes")
+    ### Make sure all chromosome arguments are fully contained in gene_annot_df's chromosome list
+    assert set(config_dict["project_out_covariates_chromosomes"]).issubset(all_chromosomes), "Invalid --project_out_covariates_chromosomes argument."
+    assert set(config_dict["feature_selection_chromosomes"]).issubset(all_chromosomes), "Invalid --feature_selection_chromosomes argument."
+    assert set(config_dict["training_chromosomes"]).issubset(all_chromosomes), "Invalid --training_chromosomes argument."
     ### Read in scores
     if config_dict["magma_prefix"] is not None:
         logging.info("MAGMA scores provided, loading MAGMA.")
@@ -589,4 +605,6 @@ def main():
     
 ### Main
 if __name__ == '__main__':
-    main()
+    args = get_pops_args()
+    config_dict = vars(args)
+    main(config_dict)
