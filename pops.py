@@ -1,6 +1,5 @@
 import pandas as pd
 import numpy as np
-import glob
 import re
 import scipy.linalg
 import random
@@ -16,6 +15,7 @@ def get_pops_args(argv=None):
     parser = argparse.ArgumentParser(description='...')
     parser.add_argument("--gene_annot_path", help="...")
     parser.add_argument("--feature_mat_prefix", help="...")
+    parser.add_argument("--num_feature_chunks", type=int, help="...")
     parser.add_argument("--magma_prefix", help="...")
     parser.add_argument('--use_magma_covariates', dest='use_magma_covariates', action='store_true')
     parser.add_argument('--ignore_magma_covariates', dest='use_magma_covariates', action='store_false')
@@ -260,7 +260,7 @@ def batch_marginal_ols(Y, X):
     return betas, se, pvals, r2
 
 
-def compute_marginal_assoc(feature_mat_prefix, Y, Y_indices, error_cov, gene_annot_df, feature_selection_Y_gene_inds):
+def compute_marginal_assoc(feature_mat_prefix, num_feature_chunks, Y, Y_indices, error_cov, gene_annot_df, feature_selection_Y_gene_inds):
     ### Get Y data
     feature_selection_genes = Y_indices[feature_selection_Y_gene_inds]
     sub_Y = Y[feature_selection_Y_gene_inds]
@@ -274,18 +274,15 @@ def compute_marginal_assoc(feature_mat_prefix, Y, Y_indices, error_cov, gene_ann
     ### Project intercept out of sub_Y in case that hasn't been done already
     sub_Y = project_out_V(sub_Y.reshape(-1,1), intercept).flatten()
     ### Get X training indices
-    rows = np.loadtxt(feature_mat_prefix + "_rows.txt", dtype=str).flatten()
+    rows = np.loadtxt(feature_mat_prefix + ".rows.txt", dtype=str).flatten()
     X_train_inds = get_indices_in_target_order(rows, feature_selection_genes)
-    ### Get file IDs; sort just for sake of canonical ordering
-    file_ids = [f.split(".")[-2] for f in glob.glob(feature_mat_prefix + "_mat.*.npy")]
-    file_ids = sorted(file_ids, key=natural_key)
     ### Loop through and get marginal association data
     marginal_assoc_data = []
     all_cols = []
-    for i in file_ids:
-        mat = np.load(feature_mat_prefix + "_mat.{}.npy".format(i))
+    for i in range(num_feature_chunks):
+        mat = np.load(feature_mat_prefix + ".mat.{}.npy".format(i))
         mat = mat[X_train_inds]
-        cols = np.loadtxt(feature_mat_prefix + "_cols.{}.txt".format(i), dtype=str).flatten()
+        cols = np.loadtxt(feature_mat_prefix + ".cols.{}.txt".format(i), dtype=str).flatten()
         ### Apply error covariance transformation if available
         if error_cov is not None:
             mat = block_AB(Linv, sub_error_cov_labels, mat)
@@ -331,18 +328,15 @@ def select_features_from_marginal_assoc_df(marginal_assoc_df,
     return selected_features
 
 
-def load_feature_matrix(feature_mat_prefix, selected_features):
+def load_feature_matrix(feature_mat_prefix, num_feature_chunks, selected_features):
     if selected_features is not None:
         selected_features_set = set(selected_features)
-    rows = np.loadtxt(feature_mat_prefix + "_rows.txt", dtype=str).flatten()
-    ### Get file IDs; sort just for sake of canonical ordering
-    file_ids = [f.split(".")[-2] for f in glob.glob(feature_mat_prefix + "_mat.*.npy")]
-    file_ids = sorted(file_ids, key=natural_key)
+    rows = np.loadtxt(feature_mat_prefix + ".rows.txt", dtype=str).flatten()
     all_mats = []
     all_cols = []
-    for i in file_ids:
-        mat = np.load(feature_mat_prefix + "_mat.{}.npy".format(i))
-        cols = np.loadtxt(feature_mat_prefix + "_cols.{}.txt".format(i), dtype=str).flatten()
+    for i in range(num_feature_chunks):
+        mat = np.load(feature_mat_prefix + ".mat.{}.npy".format(i))
+        cols = np.loadtxt(feature_mat_prefix + ".cols.{}.txt".format(i), dtype=str).flatten()
         if selected_features is not None:
             keep_inds = [True if c in selected_features_set else False for c in cols]
             mat = mat[:,keep_inds]
@@ -520,6 +514,7 @@ def main(config_dict):
                  .format(", ".join(sorted(gene_annot_df.loc[Y_indices[feature_selection_Y_gene_inds]].CHR.unique(), key=natural_key)),
                          "removed" if config_dict["feature_selection_remove_hla"] else "included"))
     marginal_assoc_df = compute_marginal_assoc(config_dict["feature_mat_prefix"],
+                                               config_dict["num_feature_chunks"],
                                                Y_proj,
                                                Y_indices,
                                                error_cov,
@@ -573,7 +568,7 @@ def main(config_dict):
     ### Load data
     ### Won't necessarily load in order of selected_features. Loads in order of matrix columns.
     ### Note: doesn't raise error if trying to select feature that isn't in columns
-    mat, cols, rows = load_feature_matrix(config_dict["feature_mat_prefix"], selected_features)
+    mat, cols, rows = load_feature_matrix(config_dict["feature_mat_prefix"], config_dict["num_feature_chunks"], selected_features)
     logging.info("Building training X and Y using genes on chromosome {}. HLA region {}."
                  .format(", ".join(sorted(gene_annot_df.loc[Y_indices[training_Y_gene_inds]].CHR.unique(), key=natural_key)),
                          "removed" if config_dict["training_remove_hla"] else "included"))

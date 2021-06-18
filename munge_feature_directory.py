@@ -23,7 +23,7 @@ if __name__ == '__main__':
 
     gene_annot_df = pd.read_csv(gene_annot_path, sep="\t", index_col="ENSGID").iloc[:,0:0]
     row_data = gene_annot_df.index.values
-    np.savetxt(save_prefix + "_rows.txt", row_data, fmt="%s")
+    np.savetxt(save_prefix + ".rows.txt", row_data, fmt="%s")
 
     #### Sort for canonical ordering
     all_feature_files = sorted([f for f in glob.glob(feature_dir + "/*")])
@@ -54,8 +54,8 @@ if __name__ == '__main__':
             save_cols = all_col_data[:MAX_COLS]
             keep_cols = all_col_data[MAX_COLS:]
             ### Save
-            np.save(save_prefix + "_mat.{}.npy".format(curr_block_index), save_mat)
-            np.savetxt(save_prefix + "_cols.{}.txt".format(curr_block_index), save_cols, fmt="%s")
+            np.save(save_prefix + ".mat.{}.npy".format(curr_block_index), save_mat)
+            np.savetxt(save_prefix + ".cols.{}.txt".format(curr_block_index), save_cols, fmt="%s")
             ### Update variables
             all_mat_data = [keep_mat]
             all_col_data = keep_cols
@@ -63,6 +63,6 @@ if __name__ == '__main__':
     ### Flush last block
     if len(all_col_data) > 0:
         mat = np.hstack(all_mat_data)
-        np.save(save_prefix + "_mat.{}.npy".format(curr_block_index), mat)
-        np.savetxt(save_prefix + "_cols.{}.txt".format(curr_block_index), all_col_data, fmt="%s")
+        np.save(save_prefix + ".mat.{}.npy".format(curr_block_index), mat)
+        np.savetxt(save_prefix + ".cols.{}.txt".format(curr_block_index), all_col_data, fmt="%s")
 
