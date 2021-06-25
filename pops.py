@@ -35,6 +35,7 @@ def get_pops_args(argv=None):
     parser.add_argument("--feature_selection_chromosomes", nargs="*", help="...")
     parser.add_argument("--feature_selection_p_cutoff", type=float, default=0.05, help="...")
     parser.add_argument("--feature_selection_max_num", type=int, help="...")
+    parser.add_argument("--feature_selection_fss_num_features", type=int, help="...")
     parser.add_argument('--feature_selection_remove_hla', dest='feature_selection_remove_hla', action='store_true')
     parser.add_argument('--feature_selection_keep_hla', dest='feature_selection_remove_hla', action='store_false')
     parser.set_defaults(feature_selection_remove_hla=True)
@@ -44,6 +45,9 @@ def get_pops_args(argv=None):
     parser.set_defaults(training_remove_hla=True)
     parser.add_argument("--method", default="ridge", help="...")
     parser.add_argument("--out_prefix", help="...")
+    parser.add_argument('--save_matrix_files', dest='save_matrix_files', action='store_true')
+    parser.add_argument('--no_save_matrix_files', dest='save_matrix_files', action='store_false')
+    parser.set_defaults(save_matrix_files=False)
     parser.add_argument("--random_seed", type=int, default=42, help="...")
     parser.add_argument('--verbose', dest='verbose', action='store_true')
     parser.add_argument('--no-verbose', dest='verbose', action='store_false')
@@ -65,13 +69,14 @@ def get_hla_genes(gene_annot_df):
     return sub_gene_annot_df.index.values
 
 
-def get_gene_indices_to_use(Y_indices, gene_annot_df, use_chrs, remove_hla):
+### Returns as vector of booleans of length len(Y_ids)
+def get_gene_indices_to_use(Y_ids, gene_annot_df, use_chrs, remove_hla):
     all_chr_genes_set = set(gene_annot_df[gene_annot_df.CHR.isin(use_chrs)].index.values)
     if remove_hla == True:
         hla_genes_set = set(get_hla_genes(gene_annot_df))
-        use_genes = [True if (g in all_chr_genes_set) and (g not in hla_genes_set) else False for g in Y_indices]
+        use_genes = [True if (g in all_chr_genes_set) and (g not in hla_genes_set) else False for g in Y_ids]
     else:
-        use_genes = [True if g in all_chr_genes_set else False for g in Y_indices]
+        use_genes = [True if g in all_chr_genes_set else False for g in Y_ids]
     return np.array(use_genes)
 
 
@@ -90,23 +95,23 @@ def read_gene_annot_df(gene_annot_path):
 
 
 def read_magma(magma_prefix, use_magma_covariates, use_magma_error_cov):
-    ### Get Y and Y_indices
+    ### Get Y and Y_ids
     magma_df = pd.read_csv(magma_prefix + ".genes.out", delim_whitespace=True)
     Y = magma_df.ZSTAT.values
-    Y_indices = magma_df.GENE.values
+    Y_ids = magma_df.GENE.values
     if use_magma_covariates is not None or use_magma_error_cov is not None:
         ### Get covariates and error_cov
         sigmas, gene_metadata = munge_magma_covariance_metadata(magma_prefix + ".genes.raw")
         cov_df = build_control_covariates(gene_metadata)
         ### Process
-        assert (cov_df.index.values == Y_indices).all(), "Covariate indices and Y indices don't match."
+        assert (cov_df.index.values == Y_ids).all(), "Covariate ids and Y ids don't match."
         covariates = cov_df.values
         error_cov = scipy.linalg.block_diag(*sigmas)
     if use_magma_covariates == False:
         covariates = None
     if use_magma_error_cov == False:
         error_cov = None
-    return Y, covariates, error_cov, Y_indices
+    return Y, covariates, error_cov, Y_ids
 
 
 def munge_magma_covariance_metadata(magma_raw_path):
@@ -116,6 +121,10 @@ def munge_magma_covariance_metadata(magma_raw_path):
         ### Get all lines
         lines = list(f)[2:]
         lines = [np.asarray(line.strip('\n').split(' ')) for line in lines]
+        ### Check that chromosomes are sequentially ordered
+        all_chroms = np.array([l[1] for l in lines])
+        all_seq_breaks = np.where(all_chroms[:-1] != all_chroms[1:])[0]
+        assert len(all_seq_breaks) == len(set(all_chroms)) - 1, "Chromosomes are not sequentially ordered."
         ### Get starting chromosome and set up temporary variables
         curr_chrom = lines[0][1]
         curr_ind = 0
@@ -193,8 +202,8 @@ def block_BA(A, block_labels, B):
     return new_B
 
 
-def regularize_error_cov(error_cov, Y, Y_indices, gene_annot_df):
-    Y_chr = gene_annot_df.loc[Y_indices].CHR.values
+def regularize_error_cov(error_cov, Y, Y_ids, gene_annot_df):
+    Y_chr = gene_annot_df.loc[Y_ids].CHR.values
     min_lambda = 0
     for c in set(Y_chr):
         subset_ind = Y_chr == c
@@ -202,24 +211,18 @@ def regularize_error_cov(error_cov, Y, Y_indices, gene_annot_df):
         min_lambda = min(min_lambda, min(W))
     ridge = abs(min(min_lambda, 0))+.05+.9*max(0, np.var(Y)-1)
     return error_cov + np.eye(error_cov.shape[0]) * ridge
-    
 
-def project_out_covariates(Y, covariates, error_cov, Y_indices, gene_annot_df, use_chrs, remove_hla):
+
+def project_out_covariates(Y, covariates, error_cov, Y_ids, gene_annot_df, project_out_covariates_Y_gene_inds):
     ### If covariates doesn't contain intercept, add intercept
     if not np.isclose(covariates.var(axis=0), 0).any():
-        logging.info("Did not detect intercept among covariates. Manually adding intercept to covariates.")
         covariates = np.hstack((covariates, np.ones((covariates.shape[0], 1))))
-    fitting_indices = get_gene_indices_to_use(Y_indices, gene_annot_df, use_chrs, remove_hla)
-    X_train, y_train = covariates[fitting_indices], Y[fitting_indices]
+    X_train, y_train = covariates[project_out_covariates_Y_gene_inds], Y[project_out_covariates_Y_gene_inds]
     if error_cov is not None:
-        sub_error_cov = error_cov[np.ix_(fitting_indices, fitting_indices)]
-        sub_error_cov_labels = gene_annot_df.loc[Y_indices[fitting_indices]].CHR.values
+        sub_error_cov = error_cov[np.ix_(project_out_covariates_Y_gene_inds, project_out_covariates_Y_gene_inds)]
+        sub_error_cov_labels = gene_annot_df.loc[Y_ids[project_out_covariates_Y_gene_inds]].CHR.values
         Linv = block_Linv(sub_error_cov, sub_error_cov_labels)
         X_train, y_train = block_AB(Linv, sub_error_cov_labels, X_train), block_AB(Linv, sub_error_cov_labels, y_train)
-    logging.info("Projecting {} covariates out of target scores using genes on chromosome {}. HLA region {}."
-                 .format(covariates.shape[1],
-                         ", ".join(sorted(gene_annot_df.loc[Y_indices[fitting_indices]].CHR.unique(), key=natural_key)),
-                         "removed" if remove_hla else "included"))
     reg = LinearRegression(fit_intercept=False).fit(X_train, y_train)
     Y_proj = Y - reg.predict(covariates)
     return Y_proj
@@ -260,19 +263,26 @@ def batch_marginal_ols(Y, X):
     return betas, se, pvals, r2
 
 
-def compute_marginal_assoc(feature_mat_prefix, num_feature_chunks, Y, Y_indices, error_cov, gene_annot_df, feature_selection_Y_gene_inds):
+### Accepts covariates, error_cov = None
+def compute_marginal_assoc(feature_mat_prefix, num_feature_chunks, Y, Y_ids, covariates, error_cov, gene_annot_df, feature_selection_Y_gene_inds):
     ### Get Y data
-    feature_selection_genes = Y_indices[feature_selection_Y_gene_inds]
+    feature_selection_genes = Y_ids[feature_selection_Y_gene_inds]
     sub_Y = Y[feature_selection_Y_gene_inds]
-    intercept = np.ones((sub_Y.shape[0], 1)) ### Make intercept
+    ### Add intercept if no near-constant feature
+    if covariates is not None and not np.isclose(covariates.var(axis=0), 0).any():
+        covariates = np.hstack((covariates, np.ones((covariates.shape[0], 1))))
+    elif covariates is None:
+        ### If no covariates then make intercept as only covariate
+        covariates = np.ones((Y.shape[0], 1)) 
+    sub_covariates = covariates[feature_selection_Y_gene_inds]
     if error_cov is not None:
         sub_error_cov = error_cov[np.ix_(feature_selection_Y_gene_inds, feature_selection_Y_gene_inds)]
         sub_error_cov_labels = gene_annot_df.loc[feature_selection_genes].CHR.values
         Linv = block_Linv(sub_error_cov, sub_error_cov_labels)
         sub_Y = block_AB(Linv, sub_error_cov_labels, sub_Y)
-        intercept = block_AB(Linv, sub_error_cov_labels, intercept)
-    ### Project intercept out of sub_Y in case that hasn't been done already
-    sub_Y = project_out_V(sub_Y.reshape(-1,1), intercept).flatten()
+        sub_covariates = block_AB(Linv, sub_error_cov_labels, sub_covariates)
+    ### Project covariates out of sub_Y
+    sub_Y = project_out_V(sub_Y.reshape(-1,1), sub_covariates).flatten()
     ### Get X training indices
     rows = np.loadtxt(feature_mat_prefix + ".rows.txt", dtype=str).flatten()
     X_train_inds = get_indices_in_target_order(rows, feature_selection_genes)
@@ -286,8 +296,8 @@ def compute_marginal_assoc(feature_mat_prefix, num_feature_chunks, Y, Y_indices,
         ### Apply error covariance transformation if available
         if error_cov is not None:
             mat = block_AB(Linv, sub_error_cov_labels, mat)
-        ### Project out intercept
-        mat = project_out_V(mat, intercept)
+        ### Project out covariates
+        mat = project_out_V(mat, sub_covariates)
         ### Compute marginal associations
         marginal_assoc_data.append(np.vstack(batch_marginal_ols(sub_Y, mat)).T)
         all_cols.append(cols)
@@ -347,11 +357,39 @@ def load_feature_matrix(feature_mat_prefix, num_feature_chunks, selected_feature
     cols = np.hstack(all_cols)
     return mat, cols, rows
 
+
+def add_feature_to_covariates(covariates, covariates_ids, feature_mat_prefix, num_feature_chunks, feature_name):
+    ### Get X indices
+    rows = np.loadtxt(feature_mat_prefix + ".rows.txt", dtype=str).flatten()
+    X_inds = get_indices_in_target_order(rows, covariates_ids)
+    for i in range(num_feature_chunks):
+        cols = np.loadtxt(feature_mat_prefix + ".cols.{}.txt".format(i), dtype=str).flatten()
+        if feature_name in cols:
+            mat = np.load(feature_mat_prefix + ".mat.{}.npy".format(i))[X_inds]
+            f = mat[:,np.where(cols == feature_name)[0]]
+            break
+    covariates = np.hstack((covariates, f))
+    return covariates
+
+
+def forward_stepwise_selection(feature_mat_prefix, num_feature_chunks, Y, Y_ids, covariates, error_cov, gene_annot_df, feature_selection_Y_gene_inds, num_features_to_select):
+    if covariates is None:
+        covariates = np.ones((Y.shape[0], 1))
+    selected_features = []
+    for i in range(num_features_to_select):
+        logging.info("FORWARD STEPWISE SELECTION: {} features selected".format(len(selected_features)))
+        marginal_assoc_df = compute_marginal_assoc(feature_mat_prefix, num_feature_chunks, Y, Y_ids, covariates, error_cov, gene_annot_df, feature_selection_Y_gene_inds)
+        top_feature = marginal_assoc_df[~marginal_assoc_df.index.isin(selected_features)].sort_values("pval").index.values[0]
+        selected_features.append(top_feature)
+        covariates = add_feature_to_covariates(covariates, Y_ids, feature_mat_prefix, num_feature_chunks, top_feature)
+    return selected_features
+    
+    
 ### --------------------------------- MODEL FITTING --------------------------------- ###
 
-def build_training(mat, cols, rows, Y, Y_indices, error_cov, gene_annot_df, training_Y_gene_inds, project_out_intercept=True):
+def build_training(mat, cols, rows, Y, Y_ids, error_cov, gene_annot_df, training_Y_gene_inds, project_out_intercept=True):
     ### Get training Y
-    training_genes = Y_indices[training_Y_gene_inds]
+    training_genes = Y_ids[training_Y_gene_inds]
     sub_Y = Y[training_Y_gene_inds]
     intercept = np.ones((sub_Y.shape[0], 1)) ### Make intercept
     ### Get training X
@@ -466,9 +504,9 @@ def main(config_dict):
     ### Read in scores
     if config_dict["magma_prefix"] is not None:
         logging.info("MAGMA scores provided, loading MAGMA.")
-        Y, covariates, error_cov, Y_indices = read_magma(config_dict["magma_prefix"],
-                                                         config_dict["use_magma_covariates"],
-                                                         config_dict["use_magma_error_cov"])
+        Y, covariates, error_cov, Y_ids = read_magma(config_dict["magma_prefix"],
+                                                     config_dict["use_magma_covariates"],
+                                                     config_dict["use_magma_error_cov"])
         if config_dict["use_magma_covariates"] == True:
             logging.info("Using MAGMA covariates.")
         else:
@@ -481,87 +519,113 @@ def main(config_dict):
         raise ValueError("Not implemented yet.")
     else:
         raise ValueError("At least one of --magma_prefix or --y_path must be provided.")
-    ### Regularize error covariance if using
-    if error_cov is not None:
-        logging.info("Regularizing error covariance.")
-        error_cov = regularize_error_cov(error_cov, Y, Y_indices, gene_annot_df)
-    ### Project out covariates if using
-    if covariates is not None:
-        logging.info("Projecting out covariates from target scores.")
-        Y_proj = project_out_covariates(Y,
-                                        covariates,
-                                        error_cov,
-                                        Y_indices,
-                                        gene_annot_df,
-                                        config_dict["project_out_covariates_chromosomes"],
-                                        config_dict["project_out_covariates_remove_hla"])
-    else:
-        Y_proj = Y
-    ### Get feature selection genes and training genes
-    feature_selection_Y_gene_inds = get_gene_indices_to_use(Y_indices,
+    ### Get projection, feature selection, and training genes
+    project_out_covariates_Y_gene_inds = get_gene_indices_to_use(Y_ids,
+                                                                 gene_annot_df,
+                                                                 config_dict["project_out_covariates_chromosomes"],
+                                                                 config_dict["project_out_covariates_remove_hla"])
+    feature_selection_Y_gene_inds = get_gene_indices_to_use(Y_ids,
                                                             gene_annot_df,
                                                             config_dict["feature_selection_chromosomes"],
                                                             config_dict["feature_selection_remove_hla"])
-    training_Y_gene_inds = get_gene_indices_to_use(Y_indices,
+    training_Y_gene_inds = get_gene_indices_to_use(Y_ids,
                                                    gene_annot_df,
                                                    config_dict["training_chromosomes"],
                                                    config_dict["training_remove_hla"])
-
+    ### Regularize error covariance if using
+    if error_cov is not None:
+        logging.info("Regularizing error covariance.")
+        error_cov = regularize_error_cov(error_cov, Y, Y_ids, gene_annot_df)
+    ### Project out covariates if using
+    if covariates is not None:
+        logging.info("Projecting {} covariates out of target scores using genes on chromosome {}. HLA region {}."
+                     .format(covariates.shape[1],
+                             ", ".join(sorted(gene_annot_df.loc[Y_ids[project_out_covariates_Y_gene_inds]].CHR.unique(), key=natural_key)),
+                             "removed" if config_dict["project_out_covariates_remove_hla"] else "included"))
+        Y_proj = project_out_covariates(Y,
+                                        covariates,
+                                        error_cov,
+                                        Y_ids,
+                                        gene_annot_df,
+                                        project_out_covariates_Y_gene_inds)
+    else:
+        Y_proj = Y
+    
     
     ### --------------------------------- Feature selection --------------------------------- ###
     ### Compute marginal association data frame
     logging.info("Computing marginal association table using genes on chromosome {}. HLA region {}."
-                 .format(", ".join(sorted(gene_annot_df.loc[Y_indices[feature_selection_Y_gene_inds]].CHR.unique(), key=natural_key)),
+                 .format(", ".join(sorted(gene_annot_df.loc[Y_ids[feature_selection_Y_gene_inds]].CHR.unique(), key=natural_key)),
                          "removed" if config_dict["feature_selection_remove_hla"] else "included"))
     marginal_assoc_df = compute_marginal_assoc(config_dict["feature_mat_prefix"],
                                                config_dict["num_feature_chunks"],
                                                Y_proj,
-                                               Y_indices,
+                                               Y_ids,
+                                               None,
                                                error_cov,
                                                gene_annot_df,
                                                feature_selection_Y_gene_inds)
-    ### Filter features based on settings
-    selected_features = select_features_from_marginal_assoc_df(marginal_assoc_df,
-                                                               config_dict["subset_features_path"],
-                                                               config_dict["control_features_path"],
-                                                               config_dict["feature_selection_p_cutoff"],
-                                                               config_dict["feature_selection_max_num"])
-    ### Annotate marginal_assoc_df with selected True/False
-    marginal_assoc_df["selected"] = marginal_assoc_df.index.isin(selected_features)
-    ### Explicitly set features with nan p-values to not-selected
-    marginal_assoc_df["selected"] = marginal_assoc_df["selected"] & ~pd.isnull(marginal_assoc_df.pval)
-    ### Redefine selected_features
-    selected_features = marginal_assoc_df[marginal_assoc_df.selected].index.values
-    ### Complex logging statement
-    select_feat_logtxt_pieces = []
-    if config_dict["subset_features_path"] is not None:
-        select_feat_logtxt_pieces.append("subsetting to features at {}".format(config_dict["subset_features_path"]))
-    if config_dict["feature_selection_p_cutoff"] is not None:
-        if config_dict["feature_selection_max_num"] is not None:
-            select_feat_logtxt_pieces.append("filtering to top {} features with p-value < {}"
-                                             .format(config_dict["feature_selection_max_num"],
-                                                     config_dict["feature_selection_p_cutoff"]))
-        else:
-            select_feat_logtxt_pieces.append("filtering to features with p-value < {}"
-                                             .format(config_dict["feature_selection_p_cutoff"]))
-    elif config_dict["feature_selection_max_num"] is not None:
-        select_feat_logtxt_pieces.append("filtering to top {} features by p-value"
-                                         .format(config_dict["feature_selection_max_num"]))
-    if config_dict["control_features_path"] is not None:
-        select_feat_logtxt_pieces.append("unioning with non-constant control features")
-    ### Combine complex logging statement
-    if len(select_feat_logtxt_pieces) == 0:
-        select_feat_logtxt = ("{} features reamin in model.".format(len(selected_features)))
-    if len(select_feat_logtxt_pieces) == 1:
-        select_feat_logtxt = ("After {}, {} features remain in model."
-                              .format(select_feat_logtxt_pieces[0], len(selected_features)))
-    elif len(select_feat_logtxt_pieces) == 2:
-        select_feat_logtxt = ("After {} and {}, {} features remain in model."
-                              .format(select_feat_logtxt_pieces[0], select_feat_logtxt_pieces[1], len(selected_features)))
-    elif len(select_feat_logtxt_pieces) == 3:
-        select_feat_logtxt = ("After {}, {}, and {}, {} features remain in model."
-                              .format(select_feat_logtxt_pieces[0], select_feat_logtxt_pieces[1], select_feat_logtxt_pieces[2], len(selected_features)))
-    logging.info(select_feat_logtxt)
+    ### Either do FSS or filter marginal_assoc_df
+    if config_dict["feature_selection_fss_num_features"] is not None:
+        logging.info("--feature_selection_fss_num_features set to {}, so performing forward stepwise selection (overriding all other feature selection settings).".format(config_dict["feature_selection_fss_num_features"]))
+        selected_features = forward_stepwise_selection(config_dict["feature_mat_prefix"],
+                                                       config_dict["num_feature_chunks"],
+                                                       Y_proj,
+                                                       Y_ids,
+                                                       None,
+                                                       error_cov,
+                                                       gene_annot_df,
+                                                       feature_selection_Y_gene_inds,
+                                                       config_dict["feature_selection_fss_num_features"])
+        marginal_assoc_df["selected"] = marginal_assoc_df.index.isin(selected_features)
+        ### Annotate with selection rank
+        marginal_assoc_df["selection_rank"] = np.nan
+        for i in range(len(selected_features)):
+            marginal_assoc_df.loc[selected_features[i], "selection_rank"] = i + 1
+        logging.info("Forward stepwise selection complete, {} features in model.".format(len(selected_features)))
+    else:
+        ### Filter features based on settings
+        selected_features = select_features_from_marginal_assoc_df(marginal_assoc_df,
+                                                                   config_dict["subset_features_path"],
+                                                                   config_dict["control_features_path"],
+                                                                   config_dict["feature_selection_p_cutoff"],
+                                                                   config_dict["feature_selection_max_num"])
+        ### Annotate marginal_assoc_df with selected True/False
+        marginal_assoc_df["selected"] = marginal_assoc_df.index.isin(selected_features)
+        ### Explicitly set features with nan p-values to not-selected
+        marginal_assoc_df["selected"] = marginal_assoc_df["selected"] & ~pd.isnull(marginal_assoc_df.pval)
+        ### Redefine selected_features
+        selected_features = marginal_assoc_df[marginal_assoc_df.selected].index.values
+        ### Complex logging statement
+        select_feat_logtxt_pieces = []
+        if config_dict["subset_features_path"] is not None:
+            select_feat_logtxt_pieces.append("subsetting to features at {}".format(config_dict["subset_features_path"]))
+        if config_dict["feature_selection_p_cutoff"] is not None:
+            if config_dict["feature_selection_max_num"] is not None:
+                select_feat_logtxt_pieces.append("filtering to top {} features with p-value < {}"
+                                                 .format(config_dict["feature_selection_max_num"],
+                                                         config_dict["feature_selection_p_cutoff"]))
+            else:
+                select_feat_logtxt_pieces.append("filtering to features with p-value < {}"
+                                                 .format(config_dict["feature_selection_p_cutoff"]))
+        elif config_dict["feature_selection_max_num"] is not None:
+            select_feat_logtxt_pieces.append("filtering to top {} features by p-value"
+                                             .format(config_dict["feature_selection_max_num"]))
+        if config_dict["control_features_path"] is not None:
+            select_feat_logtxt_pieces.append("unioning with non-constant control features")
+        ### Combine complex logging statement
+        if len(select_feat_logtxt_pieces) == 0:
+            select_feat_logtxt = ("{} features reamin in model.".format(len(selected_features)))
+        if len(select_feat_logtxt_pieces) == 1:
+            select_feat_logtxt = ("After {}, {} features remain in model."
+                                  .format(select_feat_logtxt_pieces[0], len(selected_features)))
+        elif len(select_feat_logtxt_pieces) == 2:
+            select_feat_logtxt = ("After {} and {}, {} features remain in model."
+                                  .format(select_feat_logtxt_pieces[0], select_feat_logtxt_pieces[1], len(selected_features)))
+        elif len(select_feat_logtxt_pieces) == 3:
+            select_feat_logtxt = ("After {}, {}, and {}, {} features remain in model."
+                                  .format(select_feat_logtxt_pieces[0], select_feat_logtxt_pieces[1], select_feat_logtxt_pieces[2], len(selected_features)))
+        logging.info(select_feat_logtxt)
 
     
     ### --------------------------------- Training --------------------------------- ###
@@ -570,12 +634,12 @@ def main(config_dict):
     ### Note: doesn't raise error if trying to select feature that isn't in columns
     mat, cols, rows = load_feature_matrix(config_dict["feature_mat_prefix"], config_dict["num_feature_chunks"], selected_features)
     logging.info("Building training X and Y using genes on chromosome {}. HLA region {}."
-                 .format(", ".join(sorted(gene_annot_df.loc[Y_indices[training_Y_gene_inds]].CHR.unique(), key=natural_key)),
+                 .format(", ".join(sorted(gene_annot_df.loc[Y_ids[training_Y_gene_inds]].CHR.unique(), key=natural_key)),
                          "removed" if config_dict["training_remove_hla"] else "included"))
     ### Build training X and Y
     ### Should be properly subsetted and have error_cov applied. We also explicitly project out intercept
     X_train, Y_train = build_training(mat, cols, rows,
-                                      Y_proj, Y_indices, error_cov,
+                                      Y_proj, Y_ids, error_cov,
                                       gene_annot_df, training_Y_gene_inds,
                                       project_out_intercept=True)
     logging.info("X dimensions = {}. Y dimensions = {}".format(X_train.shape, Y_train.shape))
@@ -585,9 +649,17 @@ def main(config_dict):
     ### Prediction
     logging.info("Computing PoPS scores.")
     preds_df = pops_predict(mat, rows, cols, coefs_df)
-    ### Annotate gene used in feature selection + gene used in training
-    preds_df["training_gene"] = preds_df.ENSGID.isin(Y_indices[training_Y_gene_inds])
-    preds_df["feature_selection_gene"] = preds_df.ENSGID.isin(Y_indices[feature_selection_Y_gene_inds])
+    ### Annotate Y, Y_proj, and gene used in feature selection + gene used in training
+    preds_df = preds_df.merge(pd.DataFrame(np.array([Y_ids, Y]).T, columns=["ENSGID", "Y"]),
+                              how="left",
+                              on="ENSGID")
+    if covariates is not None:
+        preds_df = preds_df.merge(pd.DataFrame(np.array([Y_ids, Y_proj]).T, columns=["ENSGID", "Y_proj"]),
+                                  how="left",
+                                  on="ENSGID")
+        preds_df["project_out_covariates_gene"] = preds_df.ENSGID.isin(Y_ids[project_out_covariates_Y_gene_inds])
+    preds_df["feature_selection_gene"] = preds_df.ENSGID.isin(Y_ids[feature_selection_Y_gene_inds])
+    preds_df["training_gene"] = preds_df.ENSGID.isin(Y_ids[training_Y_gene_inds])
 
     
     ### --------------------------------- Save --------------------------------- ###
@@ -595,8 +667,15 @@ def main(config_dict):
     preds_df.to_csv(config_dict["out_prefix"] + ".preds", sep="\t", index=False)
     coefs_df.to_csv(config_dict["out_prefix"] + ".coefs", sep="\t")
     marginal_assoc_df.to_csv(config_dict["out_prefix"] + ".marginals", sep="\t")
-
-
+    if config_dict["save_matrix_files"] == True:
+        logging.info("Saving matrix files as well.")
+        pd.DataFrame(np.hstack((Y_train.reshape(-1,1), X_train)),
+                     index=Y_ids[training_Y_gene_inds],
+                     columns=["Y_train"] + list(cols)).to_csv(config_dict["out_prefix"] + ".traindata", sep="\t")
+        pd.DataFrame(mat,
+                     index=rows,
+                     columns=cols).to_csv(config_dict["out_prefix"] + ".matdata", sep="\t")
+    
     
 ### Main
 if __name__ == '__main__':
