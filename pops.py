@@ -411,17 +411,19 @@ def build_training(mat, cols, rows, Y, Y_ids, error_cov, gene_annot_df, training
     return X, sub_Y
 
 
-def corr_score(Y, Y_pred):
-    score = scipy.stats.pearsonr(Y, Y_pred)[0]
-    return score
+# def corr_score(Y, Y_pred):
+#     score = scipy.stats.pearsonr(Y, Y_pred)[0]
+#     return score
 
 
 def initialize_regressor(method, random_state):
-    scorer = make_scorer(corr_score)
+    # scorer = make_scorer(corr_score)
     if method == "ridge":
         alphas = np.logspace(-2, 10, num=25)
-        reg = RidgeCV(fit_intercept=False, alphas=alphas, scoring=scorer)
-        logging.info("Model = RidgeCV with 25 alphas, generalized leave-one-out cross-validation, held-out Pearson correlation as scoring metric.")
+        # reg = RidgeCV(fit_intercept=False, alphas=alphas, scoring=scorer)
+        # logging.info("Model = RidgeCV with 25 alphas, generalized leave-one-out cross-validation, held-out Pearson correlation as scoring metric.")
+        reg = RidgeCV(fit_intercept=False, alphas=alphas)
+        logging.info("Model = RidgeCV with 25 alphas, generalized leave-one-out cross-validation, NMSE as scoring metric.")
     elif method == 'lasso':
         # alphas = np.logspace(-2, 10, num=25)
         # reg = LassoCV(fit_intercept=False, alphas=alphas, random_state=random_state)
