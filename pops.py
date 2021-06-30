@@ -8,6 +8,7 @@ import argparse
 
 from sklearn.linear_model import LinearRegression, RidgeCV, LassoCV
 from sklearn.metrics import make_scorer
+from scipy.sparse import load_npz
 
 ### --------------------------------- PROGRAM INPUTS --------------------------------- ###
 
@@ -170,6 +171,36 @@ def build_control_covariates(metadata):
     cov_df = cov_df.loc[:,["GENE", "gene_size", "log_gene_size", "gene_density", "log_gene_density", "inverse_mac", "log_inverse_mac"]]
     cov_df = cov_df.set_index("GENE")
     return cov_df
+
+
+def read_error_cov_from_y(y_error_cov_path, Y_ids):
+    ### Will try to read in as a: scipy sparse .npz, numpy .npy, and .tsv
+    error_cov = None
+    try:
+        error_cov = load_npz(y_error_cov_path)
+        error_cov = np.array(error_cov.todense())
+    except AttributeError as ev:
+        error_cov = np.load(y_error_cov_path)
+    if error_cov is None:
+        raise IOError("Error reading from {}. Make sure data is in scipy .npz or numpy .npy format.".format(y_error_cov_path))
+    assert error_cov.shape[0] == error_cov.shape[1], "Error covariance is not square."
+    assert error_cov.shape[0] == len(Y_ids), "Error covariance does not match dimensions of Y."
+    return error_cov
+
+
+def read_from_y(y_path, y_covariates_path, y_error_cov_path):
+    ### Get Y and Y_ids
+    y_df = pd.read_csv(y_path, sep="\t")
+    Y = y_df.Score.values
+    Y_ids = y_df.ENSGID.values
+    covariates = None
+    error_cov = None
+    if y_covariates_path is not None:
+        covariates = pd.read_csv(y_covariates_path, sep="\t", index_col="ENSGID").astype(np.float64)
+        covariates = covariates.loc[Y_ids].values
+    if y_error_cov_path is not None:
+        error_cov = read_error_cov_from_y(y_error_cov_path, Y_ids)
+    return Y, covariates, error_cov, Y_ids
 
 
 ### --------------------------------- PROCESSING DATA --------------------------------- ###
@@ -519,10 +550,22 @@ def main(config_dict):
             logging.info("Using MAGMA error covariance.")
         else:
             logging.info("Ignoring MAGMA error covariance.")
+        ### Regularize MAGMA error covariance if using
+        if error_cov is not None:
+            logging.info("Regularizing MAGMA error covariance.")
+            error_cov = regularize_error_cov(error_cov, Y, Y_ids, gene_annot_df)
     elif config_dict["y_path"] is not None:
-        raise ValueError("Not implemented yet.")
+        logging.info("Reading scores from {}.".format(config_dict["y_path"]))
+        if config_dict["y_covariates_path"] is not None:
+            logging.info("Reading covariates from {}.".format(config_dict["y_covariates_path"]))
+        if config_dict["y_error_cov_path"] is not None:
+            logging.info("Reading error covariance from {}.".format(config_dict["y_error_cov_path"]))
+        ### Note that we do not regularize covariance matrix provided in y_error_cov_path. It will be used as is.
+        Y, covariates, error_cov, Y_ids = read_from_y(config_dict["y_path"],
+                                                      config_dict["y_covariates_path"],
+                                                      config_dict["y_error_cov_path"])
     else:
-        raise ValueError("At least one of --magma_prefix or --y_path must be provided.")
+        raise ValueError("At least one of --magma_prefix or --y_path must be provided (--magma_prefix overrides --y_path).")
     ### Get projection, feature selection, and training genes
     project_out_covariates_Y_gene_inds = get_gene_indices_to_use(Y_ids,
                                                                  gene_annot_df,
@@ -536,10 +579,6 @@ def main(config_dict):
                                                    gene_annot_df,
                                                    config_dict["training_chromosomes"],
                                                    config_dict["training_remove_hla"])
-    ### Regularize error covariance if using
-    if error_cov is not None:
-        logging.info("Regularizing error covariance.")
-        error_cov = regularize_error_cov(error_cov, Y, Y_ids, gene_annot_df)
     ### Project out covariates if using
     if covariates is not None:
         logging.info("Projecting {} covariates out of target scores using genes on chromosome {}. HLA region {}."
