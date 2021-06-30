@@ -484,7 +484,9 @@ def main(config_dict):
     ### Set random seeds
     np.random.seed(config_dict["random_seed"])
     random.seed(config_dict["random_seed"])
-    
+
+    ### Display configs
+    logging.info("Config dict = {}".format(str(config_dict)))
     
     ### --------------------------------- Reading/processing data --------------------------------- ###
     gene_annot_df = read_gene_annot_df(config_dict["gene_annot_path"])
