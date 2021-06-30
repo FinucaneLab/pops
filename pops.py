@@ -457,10 +457,9 @@ def initialize_regressor(method, random_state):
         reg = RidgeCV(fit_intercept=False, alphas=alphas)
         logging.info("Model = RidgeCV with 25 alphas, generalized leave-one-out cross-validation, NMSE as scoring metric.")
     elif method == 'lasso':
-        # alphas = np.logspace(-2, 10, num=25)
-        # reg = LassoCV(fit_intercept=False, alphas=alphas, random_state=random_state)
-        reg = LassoCV(fit_intercept=False, n_alphas=200, random_state=random_state)
-        logging.info("Model = LassoCV with 200 alphas, 5-fold cross-validation, mean-squared error as scoring metric.")
+        alphas = np.logspace(-2, 10, num=25)
+        reg = LassoCV(fit_intercept=False, alphas=alphas, random_state=random_state, selection="random")
+        logging.info("Model = LassoCV with 25 alphas, 5-fold cross-validation, mean-squared error as scoring metric.")
     elif method == 'linreg':
         ### Note that this solves using pseudo-inverse if # features > # samples, corresponding to minimum norm OLS
         reg = LinearRegression(fit_intercept=False)
