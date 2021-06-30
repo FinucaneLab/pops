@@ -50,7 +50,7 @@ def get_pops_args(argv=None):
     parser.set_defaults(save_matrix_files=False)
     parser.add_argument("--random_seed", type=int, default=42, help="...")
     parser.add_argument('--verbose', dest='verbose', action='store_true')
-    parser.add_argument('--no-verbose', dest='verbose', action='store_false')
+    parser.add_argument('--no_verbose', dest='verbose', action='store_false')
     parser.set_defaults(verbose=False)
     return parser.parse_args(argv)
 
