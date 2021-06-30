@@ -174,7 +174,7 @@ def build_control_covariates(metadata):
 
 
 def read_error_cov_from_y(y_error_cov_path, Y_ids):
-    ### Will try to read in as a: scipy sparse .npz, numpy .npy, and .tsv
+    ### Will try to read in as a: scipy sparse .npz, numpy .npy
     error_cov = None
     try:
         error_cov = load_npz(y_error_cov_path)
@@ -193,6 +193,7 @@ def read_from_y(y_path, y_covariates_path, y_error_cov_path):
     y_df = pd.read_csv(y_path, sep="\t")
     Y = y_df.Score.values
     Y_ids = y_df.ENSGID.values
+    ### Read in covariates and error_cov
     covariates = None
     error_cov = None
     if y_covariates_path is not None:
