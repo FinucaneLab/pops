@@ -468,7 +468,7 @@ def initialize_regressor(method, random_state):
     return reg
 
 
-### A custom function to replace sklearn RidgeCV solver if needed
+### A custom function to replace sklearn RidgeCV solver if needed. Solves using gesvd instead of gesdd
 def _svd_decompose_design_matrix_custom(self, X, y, sqrt_sw):
     # X already centered
     X_mean = np.zeros(X.shape[1], dtype=X.dtype)
@@ -478,8 +478,7 @@ def _svd_decompose_design_matrix_custom(self, X, y, sqrt_sw):
         # by centering, the other columns are orthogonal to that one
         intercept_column = sqrt_sw[:, None]
         X = np.hstack((X, intercept_column))
-    U, singvals, _ = scipy.linalg.svd(X)
-    U = U[:,:min(X.shape[0], X.shape[1])]
+    U, singvals, _ = scipy.linalg.svd(X, full_matrices=0, lapack_driver="gesvd")
     singvals_sq = singvals ** 2
     UT_y = np.dot(U.T, y)
     return X_mean, singvals_sq, U, UT_y
@@ -495,12 +494,11 @@ def compute_coefficients(X_train, Y_train, cols, method, random_state):
     except LinAlgError as err:
         if method == "ridge":
             logging.warning(("First ridge regression failed with LinAlgError. Will re-run once more. "
-                             "This is probably caused by a non-converging SVD, which appears to be due to an instability "
-                             "with scipy.linalg.svd and the argument full_matrices=False, which can sometimes crash on perfectly ordinary matrices. "
-                             "Therefore, we monkey patch _RidgeGCV._svd_decompose_design_matrix with a custom solver "
-                             "which uses full_matrices=True and modifies the output dimensions appropriately. "
-                             "This usually seems to solve the issue but behavior is not guaranteed. "
-                             "It is recommended that the user check to make sure regression coefficients, predictions, and chosen regularization parameter are sensible."))
+                             "This is due to a rare but documented issue with LAPACK. "
+                             "To attempt to circumvent this issue, we monkey-patch sklearn's _RidgeGCV to call scipy.linalg.svd with lapack_driver=\"gesvd\" instead of \"gesdd\". "
+                             "This seems to solve the problem but behavior is not guaranteed. "
+                             "For more details, see "
+                             "https://mathematica.stackexchange.com/questions/143894/sporadic-numerical-convergence-failure-of-singularvaluedecomposition-message-s"))
             logging.info("Re-running ridge regression with monkey-patched solver.")
             ### Import module and monkey patch
             import sklearn.linear_model._ridge as sklm
