@@ -484,6 +484,22 @@ def _svd_decompose_design_matrix_custom(self, X, y, sqrt_sw):
     return X_mean, singvals_sq, U, UT_y
 
 
+### Original function in _RidgeGCV
+def _svd_decompose_design_matrix_original(self, X, y, sqrt_sw):
+    # X already centered
+    X_mean = np.zeros(X.shape[1], dtype=X.dtype)
+    if self.fit_intercept:
+        # to emulate fit_intercept=True situation, add a column
+        # containing the square roots of the sample weights
+        # by centering, the other columns are orthogonal to that one
+        intercept_column = sqrt_sw[:, None]
+        X = np.hstack((X, intercept_column))
+    U, singvals, _ = scipy.linalg.svd(X, full_matrices=0)
+    singvals_sq = singvals ** 2
+    UT_y = np.dot(U.T, y)
+    return X_mean, singvals_sq, U, UT_y
+
+
 def compute_coefficients(X_train, Y_train, cols, method, random_state):
     if method not in ["ridge", "lasso", "linreg"]:
         raise ValueError("Invalid argument for \"method\". Must be one of \"ridge\", \"lasso\", or \"linreg\".")
@@ -507,6 +523,8 @@ def compute_coefficients(X_train, Y_train, cols, method, random_state):
             reg = initialize_regressor(method, random_state)
             ### Re-fit
             reg.fit(X_train, Y_train)
+            logging.info("Restoring original solver to _RidgeGCV class.")
+            sklm._RidgeGCV._svd_decompose_design_matrix = _svd_decompose_design_matrix_original
         else:
             raise err
     if method == "ridge":
