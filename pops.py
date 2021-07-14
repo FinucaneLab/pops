@@ -500,6 +500,120 @@ def _svd_decompose_design_matrix_original(self, X, y, sqrt_sw):
     return X_mean, singvals_sq, U, UT_y
 
 
+### A custom function to replace sklearn LinearRegression fit if needed. Solves using gelss
+def _linear_regression_fit_custom(self, X, y, sample_weight=None):
+    ### Importing all the base functions needed to run the monkey-patched solver
+    from sklearn.linear_model._base import _check_sample_weight, _rescale_data, Parallel, delayed, optimize, sp, sparse, sparse_lsqr, linalg
+    n_jobs_ = self.n_jobs
+    accept_sparse = False if self.positive else ['csr', 'csc', 'coo']
+    X, y = self._validate_data(X, y, accept_sparse=accept_sparse,
+                               y_numeric=True, multi_output=True)
+    if sample_weight is not None:
+        sample_weight = _check_sample_weight(sample_weight, X,
+                                             dtype=X.dtype)
+    X, y, X_offset, y_offset, X_scale = self._preprocess_data(
+        X, y, fit_intercept=self.fit_intercept, normalize=self.normalize,
+        copy=self.copy_X, sample_weight=sample_weight,
+        return_mean=True)
+    if sample_weight is not None:
+        # Sample weight can be implemented via a simple rescaling.
+        X, y = _rescale_data(X, y, sample_weight)
+    if self.positive:
+        if y.ndim < 2:
+            self.coef_, self._residues = optimize.nnls(X, y)
+        else:
+            # scipy.optimize.nnls cannot handle y with shape (M, K)
+            outs = Parallel(n_jobs=n_jobs_)(
+                    delayed(optimize.nnls)(X, y[:, j])
+                    for j in range(y.shape[1]))
+            self.coef_, self._residues = map(np.vstack, zip(*outs))
+    elif sp.issparse(X):
+        X_offset_scale = X_offset / X_scale
+        def matvec(b):
+            return X.dot(b) - b.dot(X_offset_scale)
+        def rmatvec(b):
+            return X.T.dot(b) - X_offset_scale * np.sum(b)
+        X_centered = sparse.linalg.LinearOperator(shape=X.shape,
+                                                  matvec=matvec,
+                                                  rmatvec=rmatvec)
+        if y.ndim < 2:
+            out = sparse_lsqr(X_centered, y)
+            self.coef_ = out[0]
+            self._residues = out[3]
+        else:
+            # sparse_lstsq cannot handle y with shape (M, K)
+            outs = Parallel(n_jobs=n_jobs_)(
+                delayed(sparse_lsqr)(X_centered, y[:, j].ravel())
+                for j in range(y.shape[1]))
+            self.coef_ = np.vstack([out[0] for out in outs])
+            self._residues = np.vstack([out[3] for out in outs])
+    else:
+        self.coef_, self._residues, self.rank_, self.singular_ = \
+            linalg.lstsq(X, y, lapack_driver="gelss")
+        self.coef_ = self.coef_.T
+    if y.ndim == 1:
+        self.coef_ = np.ravel(self.coef_)
+    self._set_intercept(X_offset, y_offset, X_scale)
+    return self
+
+
+### Original function in LinearRegression
+def _linear_regression_fit_original(self, X, y, sample_weight=None):
+    ### Importing all the base functions needed to run the monkey-patched solver
+    from sklearn.linear_model._base import _check_sample_weight, _rescale_data, Parallel, delayed, optimize, sp, sparse, sparse_lsqr, linalg
+    n_jobs_ = self.n_jobs
+    accept_sparse = False if self.positive else ['csr', 'csc', 'coo']
+    X, y = self._validate_data(X, y, accept_sparse=accept_sparse,
+                               y_numeric=True, multi_output=True)
+    if sample_weight is not None:
+        sample_weight = _check_sample_weight(sample_weight, X,
+                                             dtype=X.dtype)
+    X, y, X_offset, y_offset, X_scale = self._preprocess_data(
+        X, y, fit_intercept=self.fit_intercept, normalize=self.normalize,
+        copy=self.copy_X, sample_weight=sample_weight,
+        return_mean=True)
+    if sample_weight is not None:
+        # Sample weight can be implemented via a simple rescaling.
+        X, y = _rescale_data(X, y, sample_weight)
+    if self.positive:
+        if y.ndim < 2:
+            self.coef_, self._residues = optimize.nnls(X, y)
+        else:
+            # scipy.optimize.nnls cannot handle y with shape (M, K)
+            outs = Parallel(n_jobs=n_jobs_)(
+                    delayed(optimize.nnls)(X, y[:, j])
+                    for j in range(y.shape[1]))
+            self.coef_, self._residues = map(np.vstack, zip(*outs))
+    elif sp.issparse(X):
+        X_offset_scale = X_offset / X_scale
+        def matvec(b):
+            return X.dot(b) - b.dot(X_offset_scale)
+        def rmatvec(b):
+            return X.T.dot(b) - X_offset_scale * np.sum(b)
+        X_centered = sparse.linalg.LinearOperator(shape=X.shape,
+                                                  matvec=matvec,
+                                                  rmatvec=rmatvec)
+        if y.ndim < 2:
+            out = sparse_lsqr(X_centered, y)
+            self.coef_ = out[0]
+            self._residues = out[3]
+        else:
+            # sparse_lstsq cannot handle y with shape (M, K)
+            outs = Parallel(n_jobs=n_jobs_)(
+                delayed(sparse_lsqr)(X_centered, y[:, j].ravel())
+                for j in range(y.shape[1]))
+            self.coef_ = np.vstack([out[0] for out in outs])
+            self._residues = np.vstack([out[3] for out in outs])
+    else:
+        self.coef_, self._residues, self.rank_, self.singular_ = \
+            linalg.lstsq(X, y)
+        self.coef_ = self.coef_.T
+    if y.ndim == 1:
+        self.coef_ = np.ravel(self.coef_)
+    self._set_intercept(X_offset, y_offset, X_scale)
+    return self
+
+
 def compute_coefficients(X_train, Y_train, cols, method, random_state):
     if method not in ["ridge", "lasso", "linreg"]:
         raise ValueError("Invalid argument for \"method\". Must be one of \"ridge\", \"lasso\", or \"linreg\".")
@@ -525,6 +639,23 @@ def compute_coefficients(X_train, Y_train, cols, method, random_state):
             reg.fit(X_train, Y_train)
             logging.info("Restoring original solver to _RidgeGCV class.")
             sklm._RidgeGCV._svd_decompose_design_matrix = _svd_decompose_design_matrix_original
+        elif method == "linreg":
+            logging.warning(("First linear regression failed with LinAlgError. Will re-run once more. "
+                             "This is due to a rare but documented issue with LAPACK. "
+                             "To attempt to circumvent this issue, we monkey-patch sklearn's LinearRegression class to call scipy.linalg.lstsq with lapack_driver=\"gelss\". "
+                             "This seems to solve the problem but behavior is not guaranteed. "
+                             "For more details, see "
+                             "https://mathematica.stackexchange.com/questions/143894/sporadic-numerical-convergence-failure-of-singularvaluedecomposition-message-s"))
+            logging.info("Re-running linear regression with monkey-patched solver.")
+            ### Import module and monkey patch
+            import sklearn.linear_model._base as sklm
+            sklm.LinearRegression.fit = _linear_regression_fit_custom
+            ### Re-initialize regressor
+            reg = initialize_regressor(method, random_state)
+            ### Re-fit
+            reg.fit(X_train, Y_train)
+            logging.info("Restoring original solver to LinearRegression class.")
+            sklm.LinearRegression.fit = _linear_regression_fit_original
         else:
             raise err
     if method == "ridge":
