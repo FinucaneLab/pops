@@ -47,6 +47,12 @@ def get_pops_args(argv=None):
     parser.set_defaults(training_remove_hla=True)
     parser.add_argument("--method", default="ridge", help="...")
     parser.add_argument("--out_prefix", help="...")
+    parser.add_argument('--compute_pseudobootstrap', dest='compute_pseudobootstrap', action='store_true')
+    parser.add_argument('--no_compute_pseudobootstrap', dest='compute_pseudobootstrap', action='store_false')
+    parser.set_defaults(compute_pseudobootstrap=False)
+    parser.add_argument('--compute_interpretation_matrices', dest='compute_interpretation_matrices', action='store_true')
+    parser.add_argument('--no_compute_interpretation_matrices', dest='compute_interpretation_matrices', action='store_false')
+    parser.set_defaults(compute_interpretation_matrices=False)
     parser.add_argument('--save_matrix_files', dest='save_matrix_files', action='store_true')
     parser.add_argument('--no_save_matrix_files', dest='save_matrix_files', action='store_false')
     parser.set_defaults(save_matrix_files=False)
@@ -687,6 +693,46 @@ def pops_predict(mat, rows, cols, coefs_df):
     preds_df.columns = ["ENSGID", "PoPS_Score"]
     return preds_df
 
+
+def compute_pseudobootstrap(X, rows, X_train, Y_train, alpha, num_bootstrap_samples, random_seed):
+    inv_gram_mat = np.linalg.inv(X_train.T.dot(X_train) + np.eye(X_train.shape[1]) * alpha)
+    bootstrap_weights = scipy.stats.multinomial.rvs(Y_train.shape[0],
+                                                    p=np.ones(Y_train.shape[0]) / Y_train.shape[0],
+                                                    size=num_bootstrap_samples,
+                                                    random_state=random_seed)
+    bootstrap_moment = X_train.T.dot((Y_train * bootstrap_weights).T)
+    bootstrap_betas = inv_gram_mat.dot(bootstrap_moment)
+    bootstrap_preds = X.dot(bootstrap_betas)
+    bootstrap_preds_df = pd.DataFrame(bootstrap_preds,
+                                      index=rows,
+                                      columns=["PseudoBootPred{}".format(i + 1) for i in range(num_bootstrap_samples)])
+    bootstrap_preds_df.index.name = "ENSGID"
+    bootstrap_preds_df = bootstrap_preds_df.reset_index()
+    return bootstrap_preds_df
+
+
+def compute_and_save_interpretation_matrices(X, rows, cols, X_train, Y_train, train_rows, alpha, save_prefix):
+    inv_gram_mat = np.linalg.inv(X_train.T.dot(X_train) + np.eye(X_train.shape[1]) * alpha)
+    ### Compute gene-feature contribution matrix
+    beta_recompute = inv_gram_mat.dot(X_train.T.dot(Y_train))
+    GF_contribution_matrix = X * beta_recompute
+    np.save("{}.GF_mat.npy".format(save_prefix), GF_contribution_matrix)
+    np.savetxt("{}.GF_rows".format(save_prefix), rows, fmt="%s")
+    np.savetxt("{}.GF_cols".format(save_prefix), cols, fmt="%s")
+    del GF_contribution_matrix
+    ### Compute gene-gene influence matrix
+    influence_matrix = X.dot(inv_gram_mat.dot(X_train.T))
+    np.save("{}.INF_mat.npy".format(save_prefix), influence_matrix)
+    np.savetxt("{}.INF_rows".format(save_prefix), rows, fmt="%s")
+    np.savetxt("{}.INF_cols".format(save_prefix), train_rows, fmt="%s")
+    ### Compute gene-gene contribution matrix
+    GG_contribution_matrix = influence_matrix * Y_train
+    np.save("{}.GG_mat.npy".format(save_prefix), GG_contribution_matrix)
+    np.savetxt("{}.GG_rows".format(save_prefix), rows, fmt="%s")
+    np.savetxt("{}.GG_cols".format(save_prefix), train_rows, fmt="%s")
+    del influence_matrix, GG_contribution_matrix
+
+
 ### --------------------------------- MAIN --------------------------------- ###
 
 def main(config_dict):
@@ -891,18 +937,39 @@ def main(config_dict):
 
     
     ### --------------------------------- Save --------------------------------- ###
-    logging.info("Writing output files.")
+    logging.info("Writing predictions, coefficients, and marginal associations.")
     preds_df.to_csv(config_dict["out_prefix"] + ".preds", sep="\t", index=False)
     coefs_df.to_csv(config_dict["out_prefix"] + ".coefs", sep="\t")
     marginal_assoc_df.to_csv(config_dict["out_prefix"] + ".marginals", sep="\t")
+    
+    if config_dict["compute_pseudobootstrap"] == True:
+        logging.info("Computing and saving pseudo-bootstrapped predictions.")
+        if config_dict["method"] != "ridge":
+            logging.warning("Pseudo-bootstrap not supported for methods other than ridge. Skipping.")
+        else:
+            alpha = float(coefs_df.loc["SELECTED_CV_ALPHA"].values[0])
+            num_bootstrap_samples = 500
+            bootstrap_preds_df = compute_pseudobootstrap(mat, rows, X_train, Y_train, alpha, num_bootstrap_samples, config_dict["random_seed"])
+            bootstrap_preds_df.to_csv(config_dict["out_prefix"] + ".pseudoboot", sep="\t", index=False)
+        
+    if config_dict["compute_interpretation_matrices"] == True:
+        logging.info("Computing and saving interpretation matrices.")
+        if config_dict["method"] != "ridge":
+            logging.warning("Computing interpretation matrices not supported for methods other than ridge. Skipping.")
+        else:
+            alpha = float(coefs_df.loc["SELECTED_CV_ALPHA"].values[0])
+            compute_and_save_interpretation_matrices(mat, rows, cols, X_train, Y_train, Y_ids[training_Y_gene_inds], alpha, config_dict["out_prefix"])
+    
     if config_dict["save_matrix_files"] == True:
-        logging.info("Saving matrix files as well.")
+        logging.info("Saving matrix files.")
         pd.DataFrame(np.hstack((Y_train.reshape(-1,1), X_train)),
                      index=Y_ids[training_Y_gene_inds],
                      columns=["Y_train"] + list(cols)).to_csv(config_dict["out_prefix"] + ".traindata", sep="\t")
         pd.DataFrame(mat,
                      index=rows,
-                     columns=cols).to_csv(config_dict["out_prefix"] + ".matdata", sep="\t")
+                     columns=cols).to_csv(config_dict["out_prefix"] + ".matdata", sep="\t")    
+    
+    logging.info("Program finished.")
     
     
 ### Main
