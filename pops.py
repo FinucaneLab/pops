@@ -258,7 +258,7 @@ def regularize_error_cov(error_cov, Y, Y_ids, gene_annot_df):
         subset_ind = Y_chr == c
         W = np.linalg.eigvalsh(error_cov[np.ix_(subset_ind, subset_ind)])
         min_lambda = min(min_lambda, min(W))
-    ridge = abs(min(min_lambda, 0))+.05+.9*max(0, np.var(Y)-1)
+    ridge = min(0.2 - min_lambda, 0)
     return error_cov + np.eye(error_cov.shape[0]) * ridge
 
 
@@ -727,6 +727,9 @@ def compute_and_save_interpretation_matrices(X, rows, cols, X_train, Y_train, tr
         Linv = block_Linv(error_cov, error_cov_labels)
         X_train_T_Linv = block_BA(Linv, error_cov_labels, X_train.T)
         LY_train = block_AB(L, error_cov_labels, Y_train)
+    else:
+        X_train_T_Linv = X_train.T
+        LY_train = Y_train
     inv_gram_mat = np.linalg.inv(X_train.T.dot(X_train) + np.eye(X_train.shape[1]) * alpha)
     ### Compute gene-feature contribution matrix
     beta_recompute = inv_gram_mat.dot(X_train.T.dot(Y_train))
