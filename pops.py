@@ -213,6 +213,16 @@ def read_from_y(y_path, y_covariates_path, y_error_cov_path):
 
 ### --------------------------------- PROCESSING DATA --------------------------------- ###
 
+def block_L(A, block_labels):
+    block_labels = np.array(block_labels)
+    L = np.zeros(A.shape)
+    for l in set(block_labels):
+        subset_ind = (block_labels == l)
+        sub_A = A[np.ix_(subset_ind, subset_ind)]
+        L[np.ix_(subset_ind, subset_ind)] = np.linalg.cholesky(sub_A)
+    return L
+
+
 def block_Linv(A, block_labels):
     block_labels = np.array(block_labels)
     Linv = np.zeros(A.shape)
@@ -711,7 +721,12 @@ def compute_pseudobootstrap(X, rows, X_train, Y_train, alpha, num_bootstrap_samp
     return bootstrap_preds_df
 
 
-def compute_and_save_interpretation_matrices(X, rows, cols, X_train, Y_train, train_rows, alpha, save_prefix):
+def compute_and_save_interpretation_matrices(X, rows, cols, X_train, Y_train, train_rows, alpha, error_cov, error_cov_labels, save_prefix):
+    if error_cov is not None:
+        L = block_L(error_cov, error_cov_labels)
+        Linv = block_Linv(error_cov, error_cov_labels)
+        X_train_T_Linv = block_BA(Linv, error_cov_labels, X_train.T)
+        LY_train = block_AB(L, error_cov_labels, Y_train)
     inv_gram_mat = np.linalg.inv(X_train.T.dot(X_train) + np.eye(X_train.shape[1]) * alpha)
     ### Compute gene-feature contribution matrix
     beta_recompute = inv_gram_mat.dot(X_train.T.dot(Y_train))
@@ -721,12 +736,12 @@ def compute_and_save_interpretation_matrices(X, rows, cols, X_train, Y_train, tr
     np.savetxt("{}.GF_cols".format(save_prefix), cols, fmt="%s")
     del GF_contribution_matrix
     ### Compute gene-gene influence matrix
-    influence_matrix = X.dot(inv_gram_mat.dot(X_train.T))
+    influence_matrix = X.dot(inv_gram_mat.dot(X_train_T_Linv))
     np.save("{}.INF_mat.npy".format(save_prefix), influence_matrix)
     np.savetxt("{}.INF_rows".format(save_prefix), rows, fmt="%s")
     np.savetxt("{}.INF_cols".format(save_prefix), train_rows, fmt="%s")
     ### Compute gene-gene contribution matrix
-    GG_contribution_matrix = influence_matrix * Y_train
+    GG_contribution_matrix = influence_matrix * LY_train
     np.save("{}.GG_mat.npy".format(save_prefix), GG_contribution_matrix)
     np.savetxt("{}.GG_rows".format(save_prefix), rows, fmt="%s")
     np.savetxt("{}.GG_cols".format(save_prefix), train_rows, fmt="%s")
@@ -958,7 +973,7 @@ def main(config_dict):
             logging.warning("Computing interpretation matrices not supported for methods other than ridge. Skipping.")
         else:
             alpha = float(coefs_df.loc["SELECTED_CV_ALPHA"].values[0])
-            compute_and_save_interpretation_matrices(mat, rows, cols, X_train, Y_train, Y_ids[training_Y_gene_inds], alpha, config_dict["out_prefix"])
+            compute_and_save_interpretation_matrices(mat, rows, cols, X_train, Y_train, Y_ids[training_Y_gene_inds], alpha, error_cov, gene_annot_df.loc[Y_ids[training_Y_gene_inds]].CHR.values, config_dict["out_prefix"])
     
     if config_dict["save_matrix_files"] == True:
         logging.info("Saving matrix files.")
@@ -977,3 +992,4 @@ if __name__ == '__main__':
     args = get_pops_args()
     config_dict = vars(args)
     main(config_dict)
+
