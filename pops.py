@@ -258,7 +258,7 @@ def regularize_error_cov(error_cov, Y, Y_ids, gene_annot_df):
         subset_ind = Y_chr == c
         W = np.linalg.eigvalsh(error_cov[np.ix_(subset_ind, subset_ind)])
         min_lambda = min(min_lambda, min(W))
-    ridge = min(0.2 - min_lambda, 0)
+    ridge = max(0.2 - min_lambda, 0)
     return error_cov + np.eye(error_cov.shape[0]) * ridge
 
 
