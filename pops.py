@@ -5,57 +5,112 @@ import scipy.linalg
 import random
 import logging
 import argparse
+import scipy.stats
+
+import statsmodels.api as sm
 
 from sklearn.linear_model import LinearRegression, RidgeCV, LassoCV
-from sklearn.metrics import make_scorer
+from sklearn.metrics import make_scorer, pairwise_distances, silhouette_score
 from scipy.sparse import load_npz
 from numpy.linalg import LinAlgError
+from pathlib import Path
+from sklearn.decomposition import non_negative_factorization, PCA
+from sklearn.cluster import KMeans, AgglomerativeClustering
+from collections import Counter
 
 ### --------------------------------- PROGRAM INPUTS --------------------------------- ###
 
-def get_pops_args(argv=None):
+def get_args(argv=None):
     parser = argparse.ArgumentParser(description='...')
-    parser.add_argument("--gene_annot_path", help="...")
-    parser.add_argument("--feature_mat_prefix", help="...")
-    parser.add_argument("--num_feature_chunks", type=int, help="...")
-    parser.add_argument("--magma_prefix", help="...")
-    parser.add_argument('--use_magma_covariates', dest='use_magma_covariates', action='store_true')
-    parser.add_argument('--ignore_magma_covariates', dest='use_magma_covariates', action='store_false')
-    parser.set_defaults(use_magma_covariates=True)
-    parser.add_argument('--use_magma_error_cov', dest='use_magma_error_cov', action='store_true')
-    parser.add_argument('--ignore_magma_error_cov', dest='use_magma_error_cov', action='store_false')
-    parser.set_defaults(use_magma_error_cov=True)
-    parser.add_argument("--y_path", help="...")
-    parser.add_argument("--y_covariates_path", help="...")
-    parser.add_argument("--y_error_cov_path", help="...")
-    parser.add_argument("--project_out_covariates_chromosomes", nargs="*", help="...")
-    parser.add_argument('--project_out_covariates_remove_hla', dest='project_out_covariates_remove_hla', action='store_true')
-    parser.add_argument('--project_out_covariates_keep_hla', dest='project_out_covariates_remove_hla', action='store_false')
-    parser.set_defaults(project_out_covariates_remove_hla=True)
-    parser.add_argument("--subset_features_path", help="...")
-    parser.add_argument("--control_features_path", help="...")
-    parser.add_argument("--feature_selection_chromosomes", nargs="*", help="...")
-    parser.add_argument("--feature_selection_p_cutoff", type=float, default=0.05, help="...")
-    parser.add_argument("--feature_selection_max_num", type=int, help="...")
-    parser.add_argument("--feature_selection_fss_num_features", type=int, help="...")
-    parser.add_argument('--feature_selection_remove_hla', dest='feature_selection_remove_hla', action='store_true')
-    parser.add_argument('--feature_selection_keep_hla', dest='feature_selection_remove_hla', action='store_false')
-    parser.set_defaults(feature_selection_remove_hla=True)
-    parser.add_argument("--training_chromosomes", nargs="*", help="...")
-    parser.add_argument('--training_remove_hla', dest='training_remove_hla', action='store_true')
-    parser.add_argument('--training_keep_hla', dest='training_remove_hla', action='store_false')
-    parser.set_defaults(training_remove_hla=True)
-    parser.add_argument("--method", default="ridge", help="...")
-    parser.add_argument("--out_prefix", help="...")
-    parser.add_argument('--save_matrix_files', dest='save_matrix_files', action='store_true')
-    parser.add_argument('--no_save_matrix_files', dest='save_matrix_files', action='store_false')
-    parser.set_defaults(save_matrix_files=False)
-    parser.add_argument("--random_seed", type=int, default=42, help="...")
-    parser.add_argument('--verbose', dest='verbose', action='store_true')
-    parser.add_argument('--no_verbose', dest='verbose', action='store_false')
-    parser.set_defaults(verbose=False)
+    subparsers = parser.add_subparsers(help='Modes: pops_predict, cnmf_prepare, cnmf_factorize, cnmf_combine, cnmf_validate.', dest='mode')
+    ### pops_predict arguments
+    pops_predict_parser = subparsers.add_parser('pops_predict', help="...")
+    pops_predict_parser.add_argument("--gene_annot_path", help="...")
+    pops_predict_parser.add_argument("--feature_mat_prefix", help="...")
+    pops_predict_parser.add_argument("--num_feature_chunks", type=int, help="...")
+    pops_predict_parser.add_argument("--magma_prefix", help="...")
+    pops_predict_parser.add_argument('--use_magma_covariates', dest='use_magma_covariates', action='store_true')
+    pops_predict_parser.add_argument('--ignore_magma_covariates', dest='use_magma_covariates', action='store_false')
+    pops_predict_parser.set_defaults(use_magma_covariates=True)
+    pops_predict_parser.add_argument('--use_magma_error_cov', dest='use_magma_error_cov', action='store_true')
+    pops_predict_parser.add_argument('--ignore_magma_error_cov', dest='use_magma_error_cov', action='store_false')
+    pops_predict_parser.set_defaults(use_magma_error_cov=True)
+    pops_predict_parser.add_argument("--y_path", help="...")
+    pops_predict_parser.add_argument("--y_covariates_path", help="...")
+    pops_predict_parser.add_argument("--y_error_cov_path", help="...")
+    pops_predict_parser.add_argument("--project_out_covariates_chromosomes", nargs="*", help="...")
+    pops_predict_parser.add_argument('--project_out_covariates_remove_hla', dest='project_out_covariates_remove_hla', action='store_true')
+    pops_predict_parser.add_argument('--project_out_covariates_keep_hla', dest='project_out_covariates_remove_hla', action='store_false')
+    pops_predict_parser.set_defaults(project_out_covariates_remove_hla=True)
+    pops_predict_parser.add_argument("--subset_features_path", help="...")
+    pops_predict_parser.add_argument("--control_features_path", help="...")
+    pops_predict_parser.add_argument("--feature_selection_chromosomes", nargs="*", help="...")
+    pops_predict_parser.add_argument("--feature_selection_p_cutoff", type=float, default=0.05, help="...")
+    pops_predict_parser.add_argument("--feature_selection_max_num", type=int, help="...")
+    pops_predict_parser.add_argument("--feature_selection_fss_num_features", type=int, help="...")
+    pops_predict_parser.add_argument('--feature_selection_remove_hla', dest='feature_selection_remove_hla', action='store_true')
+    pops_predict_parser.add_argument('--feature_selection_keep_hla', dest='feature_selection_remove_hla', action='store_false')
+    pops_predict_parser.set_defaults(feature_selection_remove_hla=True)
+    pops_predict_parser.add_argument("--training_chromosomes", nargs="*", help="...")
+    pops_predict_parser.add_argument('--training_remove_hla', dest='training_remove_hla', action='store_true')
+    pops_predict_parser.add_argument('--training_keep_hla', dest='training_remove_hla', action='store_false')
+    pops_predict_parser.set_defaults(training_remove_hla=True)
+    pops_predict_parser.add_argument("--method", default="ridge", help="...")
+    pops_predict_parser.add_argument("--out_prefix", help="...")
+    pops_predict_parser.add_argument('--compute_robustness', dest='compute_robustness', action='store_true')
+    pops_predict_parser.add_argument('--no_compute_robustness', dest='compute_robustness', action='store_false')
+    pops_predict_parser.set_defaults(compute_robustness=False)
+    pops_predict_parser.add_argument('--save_matrix_files', dest='save_matrix_files', action='store_true')
+    pops_predict_parser.add_argument('--no_save_matrix_files', dest='save_matrix_files', action='store_false')
+    pops_predict_parser.set_defaults(save_matrix_files=False)
+    pops_predict_parser.add_argument("--random_seed", type=int, default=42, help="...")
+    pops_predict_parser.add_argument('--verbose', dest='verbose', action='store_true')
+    pops_predict_parser.add_argument('--no_verbose', dest='verbose', action='store_false')
+    pops_predict_parser.set_defaults(verbose=False)
+    ### cnmf_prepare arguments
+    cnmf_prepare_parser = subparsers.add_parser('cnmf_prepare', help="...")
+    cnmf_prepare_parser.add_argument("--feature_mat_prefix", help="...")
+    cnmf_prepare_parser.add_argument("--num_feature_chunks", type=int, help="...")
+    cnmf_prepare_parser.add_argument("--pops_out_prefix", help="...")
+    cnmf_prepare_parser.add_argument("--out_dir", help="...")
+    cnmf_prepare_parser.add_argument("--name", help="...")
+    cnmf_prepare_parser.add_argument("--k", type=int, nargs="*", default=[5,10,15,20], help="...")
+    cnmf_prepare_parser.add_argument("--num_train_genes", type=int, default=2000, help="...")
+    cnmf_prepare_parser.add_argument("--custom_train_genes", help="...")
+    cnmf_prepare_parser.add_argument("--n_iter", type=int, default=100, help="...")
+    cnmf_prepare_parser.add_argument("--total_workers", type=int, default=1, help="...")
+    cnmf_prepare_parser.add_argument("--random_seed", type=int, default=42, help="...")
+    cnmf_prepare_parser.add_argument('--verbose', dest='verbose', action='store_true')
+    cnmf_prepare_parser.add_argument('--no_verbose', dest='verbose', action='store_false')
+    ### cnmf_factorize arguments
+    cnmf_factorize_parser = subparsers.add_parser('cnmf_factorize', help="...")
+    cnmf_factorize_parser.add_argument("--out_dir", help="...")
+    cnmf_factorize_parser.add_argument("--name", help="...")
+    cnmf_factorize_parser.add_argument("--worker_index", type=int, default=0, help="...")
+    cnmf_factorize_parser.add_argument('--verbose', dest='verbose', action='store_true')
+    cnmf_factorize_parser.add_argument('--no_verbose', dest='verbose', action='store_false')
+    ### cnmf_combine arguments
+    cnmf_combine_parser = subparsers.add_parser('cnmf_combine', help="...")
+    cnmf_combine_parser.add_argument("--out_dir", help="...")
+    cnmf_combine_parser.add_argument("--name", help="...")
+    cnmf_combine_parser.add_argument("--local_neighborhood_size", type=float, default=0.3, help="...")
+    cnmf_combine_parser.add_argument("--percentage_trim", type=float, default=0.1, help="...")
+    cnmf_combine_parser.add_argument("--cosine_thresh", type=float, default=0.9, help="...")
+    cnmf_combine_parser.add_argument("--random_seed", type=int, default=42, help="...")
+    cnmf_combine_parser.add_argument('--verbose', dest='verbose', action='store_true')
+    cnmf_combine_parser.add_argument('--no_verbose', dest='verbose', action='store_false')
+    ### Add alternative arguments for clustering / trimming, etc.
+    ### cnmf_validate arguments
+    cnmf_validate_parser = subparsers.add_parser('cnmf_validate', help="...")
+    cnmf_validate_parser.add_argument("--out_dir", help="...")
+    cnmf_validate_parser.add_argument("--name", help="...")
+    cnmf_validate_parser.add_argument("--pops_out_prefix", help="...")
+    cnmf_validate_parser.add_argument("--custom_covariate_table", help="...")
+    cnmf_validate_parser.add_argument("--validation_table", help="...")
+    cnmf_validate_parser.add_argument("--num_pcs", type=int, nargs="*", help="...")
+    cnmf_validate_parser.add_argument('--verbose', dest='verbose', action='store_true')
+    cnmf_validate_parser.add_argument('--no_verbose', dest='verbose', action='store_false')
     return parser.parse_args(argv)
-
 
 ### --------------------------------- GENERAL --------------------------------- ###
 
@@ -87,6 +142,16 @@ def get_indices_in_target_order(ref_list, target_names):
     for i, e in enumerate(ref_list):
         ref_to_ind_mapper[e] = i
     return np.array([ref_to_ind_mapper[t] for t in target_names])
+
+
+def save_df_to_npz(obj, filename):
+    np.savez_compressed(filename, data=obj.values, index=obj.index.values, columns=obj.columns.values)
+    
+    
+def load_df_from_npz(filename):
+    with np.load(filename, allow_pickle=True) as f:
+        obj = pd.DataFrame(**f)
+    return obj
 
 ### --------------------------------- READING DATA --------------------------------- ###
 
@@ -444,11 +509,6 @@ def build_training(mat, cols, rows, Y, Y_ids, error_cov, gene_annot_df, training
     return X, sub_Y
 
 
-# def corr_score(Y, Y_pred):
-#     score = scipy.stats.pearsonr(Y, Y_pred)[0]
-#     return score
-
-
 def initialize_regressor(method, random_state):
     # scorer = make_scorer(corr_score)
     if method == "ridge":
@@ -687,9 +747,91 @@ def pops_predict(mat, rows, cols, coefs_df):
     preds_df.columns = ["ENSGID", "PoPS_Score"]
     return preds_df
 
+### --------------------------------- ADDITIONAL FUNCTIONALITY --------------------------------- ###
+
+def compute_robustness(X, rows, X_train, Y_train, alpha, num_resamples, random_seed):
+    inv_gram_mat = np.linalg.inv(X_train.T.dot(X_train) + np.eye(X_train.shape[1]) * alpha)
+    resample_weights = scipy.stats.multinomial.rvs(Y_train.shape[0],
+                                                    p=np.ones(Y_train.shape[0]) / Y_train.shape[0],
+                                                    size=num_resamples,
+                                                    random_state=random_seed)
+    resample_moment = X_train.T.dot((Y_train * resample_weights).T)
+    resample_betas = inv_gram_mat.dot(resample_moment)
+    resample_preds = X.dot(resample_betas)
+    resample_preds_df = pd.DataFrame(resample_preds,
+                                     index=rows,
+                                     columns=["ResamplePred{}".format(i + 1) for i in range(num_resamples)])
+    resample_preds_df.index.name = "ENSGID"
+    resample_preds_df = resample_preds_df.reset_index()
+    return resample_preds_df
+
+
+def prune_cnmf_components(all_comp_df, all_usage_df, k_components_list, cosine_thresh=0.9):
+    cosine = all_usage_df.T.dot(all_usage_df)
+    cosine = pd.DataFrame(cosine.values / np.sqrt((np.diagonal(cosine.values) * np.diagonal(cosine.values).reshape(-1,1))),
+                          index=cosine.index.values, columns=cosine.columns.values)
+    cosine_masked = cosine * (1 - scipy.linalg.block_diag(*[np.ones((k,k)) for k in k_components_list]))
+    clust = AgglomerativeClustering(n_clusters=None,
+                                    affinity="precomputed",
+                                    linkage="single",
+                                    distance_threshold=1-cosine_thresh).fit(1-cosine_masked)
+    ### If redundant components, we use the one from the smallest k, since hopefully more stable.
+    ### Assumes components are ordered in order of increasing k.
+    use_components = []
+    for c in sorted(set(clust.labels_)):
+        use_components.append(cosine.columns.values[clust.labels_ == c][0])
+    use_components = sorted(use_components, key=lambda x: np.where(all_comp_df.index.values == x)[0][0])
+    filt_comp_df = all_comp_df.loc[use_components]
+    filt_usage_df = all_usage_df.loc[:,use_components]
+    return filt_comp_df, filt_usage_df
+
+
+def compute_overall_usage_significance(usage_df, val_df, cov_df, pcs=None):
+    X = val_df.values
+    C = cov_df.values
+    Ys = usage_df.values
+    ### Do PCA if that option is requested
+    if pcs is not None:
+        X = PCA(n_components=pcs, svd_solver="full").fit_transform(X)
+    ### Project out C
+    X_proj = X - LinearRegression(fit_intercept=True).fit(C, X).predict(C)
+    Ys_proj = Ys - LinearRegression(fit_intercept=True).fit(C, Ys).predict(C)
+    ### Only use features with substantial leftover variance (for stability in case we include exact trait)
+    use_features = X_proj.var(axis=0) > 0.01
+    ### Compute p-values
+    sig_df = pd.DataFrame(columns=usage_df.columns)
+    for i in range(Ys.shape[1]):
+        if use_features.sum() > 0:
+            results = sm.OLS(Ys_proj[:,i], X_proj[:,use_features]).fit()
+            sig_df.loc["All_Annotations", usage_df.columns[i]] = results.f_pvalue
+        else:
+            sig_df.loc["All_Annotations", usage_df.columns[i]] = np.nan
+    return sig_df
+
+
+def compute_single_annot_usage_significance(usage_df, val_df, cov_df):
+    X = val_df.values
+    C = cov_df.values
+    Ys = usage_df.values
+    ### Project out C
+    X_proj = X - LinearRegression(fit_intercept=True).fit(C, X).predict(C)
+    Ys_proj = Ys - LinearRegression(fit_intercept=True).fit(C, Ys).predict(C)
+    ### Only use features with non-trivial leftover variance (for stability in case we include exact trait)
+    use_features = X_proj.var(axis=0) > 0.01
+    ### Compute p-values
+    sig_df = pd.DataFrame(columns=usage_df.columns)
+    for j in range(X.shape[1]):
+        for i in range(Ys.shape[1]):
+            if use_features[j]:
+                results = sm.OLS(Ys_proj[:,i], X_proj[:,[j]]).fit()
+                sig_df.loc[val_df.columns.values[j], usage_df.columns[i]] = 1 - scipy.stats.t.cdf(results.tvalues[0], df=results.df_resid)
+            else:
+                sig_df.loc[val_df.columns.values[j], usage_df.columns[i]] = np.nan
+    return sig_df
+
 ### --------------------------------- MAIN --------------------------------- ###
 
-def main(config_dict):
+def pops_predict_main(config_dict):
     ### --------------------------------- Basic settings --------------------------------- ###
     ### Set logging settings
     if config_dict["verbose"]:
@@ -891,22 +1033,298 @@ def main(config_dict):
 
     
     ### --------------------------------- Save --------------------------------- ###
-    logging.info("Writing output files.")
+    logging.info("Writing predictions, coefficients, and marginal associations.")
     preds_df.to_csv(config_dict["out_prefix"] + ".preds", sep="\t", index=False)
     coefs_df.to_csv(config_dict["out_prefix"] + ".coefs", sep="\t")
     marginal_assoc_df.to_csv(config_dict["out_prefix"] + ".marginals", sep="\t")
+    
+    if config_dict["compute_robustness"] == True:
+        logging.info("Computing and saving resampled predictions.")
+        if config_dict["method"] != "ridge":
+            logging.warning("Robustness analysis not supported for methods other than ridge. Skipping.")
+        else:
+            alpha = float(coefs_df.loc["SELECTED_CV_ALPHA"].values[0])
+            num_resamples = 500
+            robustness_preds_df = compute_robustness(mat, rows, X_train, Y_train, alpha, num_resamples, config_dict["random_seed"])
+            robustness_preds_df.to_csv(config_dict["out_prefix"] + ".robustness", sep="\t", index=False)
+    
     if config_dict["save_matrix_files"] == True:
-        logging.info("Saving matrix files as well.")
+        logging.info("Saving matrix files.")
         pd.DataFrame(np.hstack((Y_train.reshape(-1,1), X_train)),
                      index=Y_ids[training_Y_gene_inds],
                      columns=["Y_train"] + list(cols)).to_csv(config_dict["out_prefix"] + ".traindata", sep="\t")
         pd.DataFrame(mat,
                      index=rows,
                      columns=cols).to_csv(config_dict["out_prefix"] + ".matdata", sep="\t")
+
+
+def cnmf_prepare_main(config_dict):
+    ### --------------------------------- Basic settings --------------------------------- ###
+    ### Set logging settings
+    if config_dict["verbose"]:
+        logging.basicConfig(format="%(levelname)s: %(message)s", level=logging.DEBUG)
+        logging.info("Verbose output enabled.")
+    else:
+        logging.basicConfig(format="%(levelname)s: %(message)s")
+    ### Set random seeds
+    np.random.seed(config_dict["random_seed"])
+    random.seed(config_dict["random_seed"])
+
+    ### Display configs
+    logging.info("Config dict = {}".format(str(config_dict)))
     
+    ### --------------------------------- Prepare --------------------------------- ###
+    ### Read in PoPS coefficients and define training genes
+    logging.info("Reading PoPS results from {}".format(config_dict["pops_out_prefix"]))
+    coefs_df = pd.read_csv(config_dict["pops_out_prefix"] + ".coefs", sep="\t", index_col=0)
+    coefs_df = coefs_df.loc[~coefs_df.index.isin(["METHOD", "SELECTED_CV_ALPHA", "BEST_CV_SCORE"])]
+    coefs_df["beta"] = coefs_df["beta"].astype(np.float64)
+    if config_dict["custom_train_genes"] is not None:
+        logging.info("Using custom training genes from {}".format(config_dict["custom_train_genes"]))
+        train_genes = np.loadtxt(config_dict["custom_train_genes"], dtype=str).flatten()
+    else:
+        logging.info("Defining top {} PoPS genes as training genes".format(str(config_dict["num_train_genes"])))
+        pred_df = pd.read_csv(config_dict["pops_out_prefix"] + ".preds", sep="\t", index_col=0)
+        train_genes = pred_df.sort_values("PoPS_Score", ascending=False).index.values[:config_dict["num_train_genes"]]
+    ### Read in feature matrix
+    logging.info("Reading feature matrix from {}".format(config_dict["feature_mat_prefix"]))
+    mat, cols, rows = load_feature_matrix(config_dict["feature_mat_prefix"], config_dict["num_feature_chunks"], coefs_df.index.values)
+    ### Center, scale, and threshold feature matrix
+    logging.info("Processing feature matrix")
+    pops_f_df = pd.DataFrame((mat - mat.mean(axis=0)) * coefs_df.loc[cols].beta.astype(np.float64).values,
+                             index=rows, columns=cols)
+    pops_f_pos_df = pops_f_df * (pops_f_df > 0)
+    ### Compute job table
+    logging.info("Computing job table")
+    assert len(set(config_dict["k"])) == len(config_dict["k"]), "Non-unique inputs for k."
+    job_table = pd.DataFrame([[k,i] for k in config_dict["k"] for i in range(config_dict["n_iter"])], columns=["k", "iter"])
+    job_table["worker_index"] = np.tile(np.arange(config_dict["total_workers"]), job_table.shape[0] // config_dict["total_workers"] + 1)[:job_table.shape[0]]
+    job_table["random_seed"] = np.random.randint(low=1, high=(2**32)-1, size=job_table.shape[0])
+    ### Create output directory within specified directory with name of analysis
+    logging.info("Creating output directory at {}".format(config_dict["out_dir"] + "/" + config_dict["name"]))
+    Path(config_dict["out_dir"] + "/" + config_dict["name"]).mkdir(parents=True, exist_ok=True)
+    ### Create cnmf_tmp directory within this directory
+    logging.info("Creating tmp directory at {}".format(config_dict["out_dir"] + "/" + config_dict["name"] + "/cnmf_tmp/"))
+    Path(config_dict["out_dir"] + "/" + config_dict["name"] + "/cnmf_tmp/").mkdir(parents=True, exist_ok=True)
+    ### Write out input matrix
+    logging.info("Saving input matrix to {}".format(config_dict["out_dir"] + "/" + config_dict["name"] + "/" + config_dict["name"] + ".input_matrix.npz"))
+    save_df_to_npz(pops_f_pos_df, config_dict["out_dir"] + "/" + config_dict["name"] + "/" + config_dict["name"] + ".input_matrix.npz")
+    ### Write out training genes
+    logging.info("Saving training genes to {}".format(config_dict["out_dir"] + "/" + config_dict["name"] + "/" + config_dict["name"] + ".train_genes"))
+    np.savetxt(config_dict["out_dir"] + "/" + config_dict["name"] + "/" + config_dict["name"] + ".train_genes", train_genes, fmt="%s")
+    ### Write out job table
+    logging.info("Saving job table to {}".format(config_dict["out_dir"] + "/" + config_dict["name"] + "/" + config_dict["name"] + ".job_table"))
+    job_table.to_csv(config_dict["out_dir"] + "/" + config_dict["name"] + "/" + config_dict["name"] + ".job_table", sep="\t", index=False)
+
     
+def cnmf_factorize_main(config_dict):
+    ### --------------------------------- Basic settings --------------------------------- ###
+    ### Set logging settings
+    if config_dict["verbose"]:
+        logging.basicConfig(format="%(levelname)s: %(message)s", level=logging.DEBUG)
+        logging.info("Verbose output enabled.")
+    else:
+        logging.basicConfig(format="%(levelname)s: %(message)s")
+
+    ### Display configs
+    logging.info("Config dict = {}".format(str(config_dict)))
+    
+    ### --------------------------------- Factorize --------------------------------- ###
+    ### Load data and check types
+    logging.info("Loading data from {}".format(config_dict["out_dir"] + "/" + config_dict["name"] + "/"))
+    pops_f_pos_df = load_df_from_npz(config_dict["out_dir"] + "/" + config_dict["name"] + "/" + config_dict["name"] + ".input_matrix.npz")
+    train_genes = np.loadtxt(config_dict["out_dir"] + "/" + config_dict["name"] + "/" + config_dict["name"] + ".train_genes", dtype=str).flatten()
+    job_table = pd.read_csv(config_dict["out_dir"] + "/" + config_dict["name"] + "/" + config_dict["name"] + ".job_table", sep="\t")
+    assert (job_table.k.dtype == int) and (job_table.iter.dtype == int) and (job_table.worker_index.dtype == int) and (job_table.random_seed.dtype == int), "Job table contains non-integer values."
+    
+    ### Subset data
+    X = pops_f_pos_df.loc[train_genes].values
+    sub_job_table = job_table[job_table.worker_index == config_dict["worker_index"]]
+    logging.info("Subsetting to {} genes and {} jobs for training".format(str(X.shape[0]), str(sub_job_table.shape[0])))
+    
+    ### Factorize
+    for i, row in sub_job_table.iterrows():
+        logging.info("Training for k = {} iter = {}".format(str(row.k), str(row.iter)))
+        usages, spectra, n_iter = non_negative_factorization(X, n_components=row.k, init='random', max_iter=1000, random_state=row.random_seed)
+        spectra = pd.DataFrame(spectra, index=np.arange(1, row.k+1), columns=pops_f_pos_df.columns.values)
+        save_df_to_npz(spectra, config_dict["out_dir"] + "/" + config_dict["name"] + "/cnmf_tmp/" + config_dict["name"] + ".spectra.k_{}.iter_{}.df.npz".format(row.k, row.iter))
+
+
+def cnmf_combine_main(config_dict):
+    ### --------------------------------- Basic settings --------------------------------- ###
+    ### Set logging settings
+    if config_dict["verbose"]:
+        logging.basicConfig(format="%(levelname)s: %(message)s", level=logging.DEBUG)
+        logging.info("Verbose output enabled.")
+    else:
+        logging.basicConfig(format="%(levelname)s: %(message)s")
+    ### Set random seeds
+    np.random.seed(config_dict["random_seed"])
+    random.seed(config_dict["random_seed"])
+
+    ### Display configs
+    logging.info("Config dict = {}".format(str(config_dict)))
+    
+    ### --------------------------------- Combine --------------------------------- ###
+    ### Load data and check types
+    logging.info("Loading data from {}".format(config_dict["out_dir"] + "/" + config_dict["name"] + "/"))
+    pops_f_pos_df = load_df_from_npz(config_dict["out_dir"] + "/" + config_dict["name"] + "/" + config_dict["name"] + ".input_matrix.npz")
+    job_table = pd.read_csv(config_dict["out_dir"] + "/" + config_dict["name"] + "/" + config_dict["name"] + ".job_table", sep="\t")
+    assert (job_table.k.dtype == int) and (job_table.iter.dtype == int) and (job_table.worker_index.dtype == int) and (job_table.random_seed.dtype == int), "Job table contains non-integer values."
+
+    ### Combine main loop
+    k_components_list = sorted(job_table.k.unique())
+    k_usage_dict = {}
+    k_spectra_dict = {}
+    for k in k_components_list:
+        logging.info("Processing components for k = {}".format(str(k)))
+        combined_spectra = []
+        spectra_cols = None
+        
+        ### Load, concatenate, and normalize spectra from individual runs
+        for i, row in job_table[job_table.k == k].iterrows():
+            spectra = load_df_from_npz(config_dict["out_dir"] + "/" + config_dict["name"] + "/cnmf_tmp/" + config_dict["name"] + ".spectra.k_{}.iter_{}.df.npz".format(row.k, row.iter))
+            if spectra_cols is None:
+                spectra_cols = spectra.columns.values
+            combined_spectra.append(spectra.values)
+        combined_spectra = np.vstack(combined_spectra)
+        combined_spectra = combined_spectra / np.sqrt(np.square(combined_spectra).sum(axis=1, keepdims=True))
+        logging.info("(k = {}) Dimensions of combined components matrix = {}".format(str(k), str(combined_spectra.shape)))
+        
+        ### Filter spectra matrix
+        D = pairwise_distances(combined_spectra, metric="euclidean")
+        D_sorted = np.sort(D, axis=1)
+        n_neighbors = int(config_dict["local_neighborhood_size"] * job_table[job_table.k == k].shape[0])
+        if n_neighbors > 0:
+            logging.info("(k = {}) Computing average distance to {} nearest neighbors".format(str(k), str(n_neighbors)))
+            av_knn_dist = D_sorted[:,1:1+n_neighbors].mean(axis=1)
+            keep_inds = av_knn_dist < np.quantile(av_knn_dist, 1 - config_dict["percentage_trim"])
+            assert np.sum(keep_inds) >= k, "Not enough leftover spectra after filtering. Consider lowering percentage_trim or increasing number of iterations."
+            filt_spectra = combined_spectra[keep_inds]
+        else:
+            logging.warning("(k = {}) local_neighborhood_size is too small, resulting in 0 neighbors being considered. Program will continue without filtering, but consider increasing local_neighborhood_size".format(str(k)))
+            filt_spectra = combined_spectra
+        logging.info("(k = {}) Dimensions of filtered components matrix = {}".format(str(k), str(filt_spectra.shape)))
+            
+        ### Cluster filtered spectra matrix
+        kmeans_model = KMeans(n_clusters=k, n_init=10, random_state=config_dict["random_seed"])
+        kmeans_model.fit(filt_spectra)
+        
+        ### Log some metrics of clustering
+        s_score = silhouette_score(filt_spectra, kmeans_model.labels_, metric='euclidean', sample_size=None)
+        label_counter = Counter(kmeans_model.labels_+1)
+        logging.info("(k = {}) Silhouette score of clustering = {}".format(str(k), str(s_score)))
+        logging.info("(k = {}) Cluster label counts = {}, min cluster size = {}, max cluster size = {}".format(str(k), str(label_counter), str(min(label_counter.values())), str(max(label_counter.values()))))
+        
+        ### Compute consensus spectra
+        logging.info("(k = {}) Computing consensus spectra".format(str(k)))
+        consensus_spectra = pd.DataFrame(columns=spectra_cols)
+        for l in sorted(list(set(kmeans_model.labels_))):
+            filt_spectra_clust = filt_spectra[kmeans_model.labels_ == l]
+            consensus_spectra_clust = np.median(filt_spectra_clust, axis=0)
+            consensus_spectra_clust = consensus_spectra_clust / np.sqrt(np.square(consensus_spectra_clust).sum())
+            consensus_spectra.loc["COMP_{}_OF_{}".format(str(l + 1), str(k))] = consensus_spectra_clust
+        
+        ### Project full feature matrix onto consensus spectra
+        logging.info("(k = {}) Projecting all genes onto components".format(str(k)))
+        W, H, n_iter = non_negative_factorization(pops_f_pos_df.values,
+                                                  n_components=consensus_spectra.shape[0],
+                                                  H=consensus_spectra.loc[:,pops_f_pos_df.columns].values,
+                                                  update_H=False,
+                                                  random_state=config_dict["random_seed"])
+        k_spectra_dict[k] = consensus_spectra
+        k_usage_dict[k] = pd.DataFrame(W, index=pops_f_pos_df.index.values, columns=consensus_spectra.index.values)
+
+    ### Combine spectra/usage into single dataframe
+    logging.info("Combining results across all k")
+    all_comp_df = pd.concat([k_spectra_dict[k] for k in k_components_list], axis=0)
+    all_usage_df = pd.concat([k_usage_dict[k] for k in k_components_list], axis=1)
+
+    ### Prune redundant components
+    logging.info("Pruning redundant components")
+    filt_comp_df, filt_usage_df = prune_cnmf_components(all_comp_df, all_usage_df, k_components_list, cosine_thresh=config_dict["cosine_thresh"])
+    logging.info("{}/{} components retained".format(filt_comp_df.shape[0], all_comp_df.shape[0]))
+
+    ### Save
+    logging.info("Saving results to {}".format(config_dict["out_dir"] + "/" + config_dict["name"] + "/"))
+    all_comp_df.to_csv(config_dict["out_dir"] + "/" + config_dict["name"] + "/" + config_dict["name"] + ".all_comp.tsv", sep="\t")
+    all_usage_df.to_csv(config_dict["out_dir"] + "/" + config_dict["name"] + "/" + config_dict["name"] + ".all_usage.tsv", sep="\t")
+    filt_comp_df.to_csv(config_dict["out_dir"] + "/" + config_dict["name"] + "/" + config_dict["name"] + ".filt_comp.tsv", sep="\t")
+    filt_usage_df.to_csv(config_dict["out_dir"] + "/" + config_dict["name"] + "/" + config_dict["name"] + ".filt_usage.tsv", sep="\t")
+
+
+def cnmf_validate_main(config_dict):
+    ### --------------------------------- Basic settings --------------------------------- ###
+    ### Set logging settings
+    if config_dict["verbose"]:
+        logging.basicConfig(format="%(levelname)s: %(message)s", level=logging.DEBUG)
+        logging.info("Verbose output enabled.")
+    else:
+        logging.basicConfig(format="%(levelname)s: %(message)s")
+
+    ### Display configs
+    logging.info("Config dict = {}".format(str(config_dict)))
+    
+    ### --------------------------------- Validate --------------------------------- ###
+    ### Load data, check types, and process
+    logging.info("Loading data from {}".format(config_dict["out_dir"] + "/" + config_dict["name"] + "/"))
+    filt_usage_df = pd.read_csv(config_dict["out_dir"] + "/" + config_dict["name"] + "/" + config_dict["name"] + ".filt_usage.tsv",
+                                sep="\t", index_col=0)
+    validation_df = pd.read_csv(config_dict["validation_table"], sep="\t", index_col=0)
+    assert pd.isnull(validation_df).values.any() == False, "Missing values in validation table"
+    genes_to_use = sorted(list(set(validation_df.index.values).intersection(filt_usage_df.index.values)))
+    sub_filt_usage_df = filt_usage_df.loc[genes_to_use]
+    sub_validation_df = validation_df.loc[genes_to_use]
+    sub_validation_df = (sub_validation_df - sub_validation_df.mean(axis=0)) / sub_validation_df.std(axis=0)
+
+    ### Read and process covariate table
+    if config_dict["pops_out_prefix"] is not None:
+        logging.info("pops_out_prefix provided, reading covariates from {}".format(config_dict["pops_out_prefix"] + ".preds"))
+        pops_pred = pd.read_csv(config_dict["pops_out_prefix"] + ".preds", sep="\t", index_col=0)
+        covariate_df = pops_pred.loc[:,["Y", "Y_proj"]]
+        covariate_df = sub_validation_df.loc[:,[]].merge(covariate_df, how="left", left_index=True, right_index=True)
+        covariate_df["Y"] = covariate_df["Y"].fillna(covariate_df["Y"].mean())
+        covariate_df["Y"] = (covariate_df["Y"] - covariate_df["Y"].mean()) / covariate_df["Y"].std()
+        covariate_df["Y_proj"] = covariate_df["Y_proj"].fillna(covariate_df["Y_proj"].mean())
+        covariate_df["Y_proj"] = (covariate_df["Y_proj"] - covariate_df["Y_proj"].mean()) / covariate_df["Y_proj"].std()
+        for p in range(2,4):
+            covariate_df["Y_{}".format(str(p))] = np.power(covariate_df["Y"], p)
+            covariate_df["Y_proj_{}".format(str(p))] = np.power(covariate_df["Y_proj"], p)
+    elif config_dict["custom_covariate_table"] is not None:
+        logging.info("pops_out_prefix not provided but custom_covariate_table provided, reading covariates from {}".format(config_dict["custom_covariate_table"]))
+        covariate_df = pd.read_csv(config_dict["custom_covariate_table"], sep="\t", index_col=0)
+        covariate_df = sub_validation_df.loc[:,[]].merge(covariate_df, how="left", left_index=True, right_index=True)
+        assert pd.isnull(covariate_df).values.any() == False, "If custom_covariate_table is provided, you must ensure there is a row for every gene that appears in both {} and {}".format(config_dict["out_dir"] + "/" + config_dict["name"] + "/" + config_dict["name"] + ".filt_usage.tsv", config_dict["validation_table"])
+    else:
+        raise ValueError("At least one of pops_out_prefix and custom_covariate_table must be provided")
+
+    ### Compute enrichments
+    logging.info("Computing and saving overall usage significances")
+    sig_overall_df = compute_overall_usage_significance(sub_filt_usage_df, sub_validation_df, covariate_df, pcs=None)
+    sig_overall_df.to_csv(config_dict["out_dir"] + "/" + config_dict["name"] + "/" + config_dict["name"] + ".overall_sig.tsv", sep="\t")
+    logging.info("Computing and saving per annotation usage significances")
+    sig_per_annot_df = compute_single_annot_usage_significance(sub_filt_usage_df, sub_validation_df, covariate_df)
+    sig_per_annot_df.to_csv(config_dict["out_dir"] + "/" + config_dict["name"] + "/" + config_dict["name"] + ".single_sig.tsv", sep="\t")
+    if config_dict["num_pcs"] is not None:
+        for n_pc in config_dict["num_pcs"]:
+            logging.info("Computing and saving PC{} usage significances".format(str(n_pc)))
+            sig_pc_df = compute_overall_usage_significance(sub_filt_usage_df, sub_validation_df, covariate_df, pcs=n_pc)
+            sig_pc_df.to_csv(config_dict["out_dir"] + "/" + config_dict["name"] + "/" + config_dict["name"] + ".pc{}_sig.tsv".format(str(n_pc)), sep="\t")
+
+
 ### Main
 if __name__ == '__main__':
-    args = get_pops_args()
+    args = get_args()
     config_dict = vars(args)
-    main(config_dict)
+    if config_dict["mode"] == "pops_predict":
+        pops_predict_main(config_dict)
+    elif config_dict["mode"] == "cnmf_prepare":
+        cnmf_prepare_main(config_dict)
+    elif config_dict["mode"] == "cnmf_factorize":
+        cnmf_factorize_main(config_dict)
+    elif config_dict["mode"] == "cnmf_combine":
+        cnmf_combine_main(config_dict)
+    elif config_dict["mode"] == "cnmf_validate":
+        cnmf_validate_main(config_dict)
+    else:
+        raise ValueError("Program mode must be either pops_predict, cnmf_prepare, cnmf_factorize, cnmf_combine, or cnmf_validate.")
