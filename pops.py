@@ -95,7 +95,7 @@ def get_args(argv=None):
     cnmf_combine_parser.add_argument("--name", help="...")
     cnmf_combine_parser.add_argument("--local_neighborhood_size", type=float, default=0.3, help="...")
     cnmf_combine_parser.add_argument("--percentage_trim", type=float, default=0.1, help="...")
-    cnmf_combine_parser.add_argument("--cosine_thresh", type=float, default=0.9, help="...")
+    cnmf_combine_parser.add_argument("--cosine_thresh", type=float, default=0.8, help="...")
     cnmf_combine_parser.add_argument("--random_seed", type=int, default=42, help="...")
     cnmf_combine_parser.add_argument('--verbose', dest='verbose', action='store_true')
     cnmf_combine_parser.add_argument('--no_verbose', dest='verbose', action='store_false')
@@ -786,10 +786,13 @@ def prune_cnmf_components(all_comp_df, all_usage_df, k_components_list, cosine_t
     return filt_comp_df, filt_usage_df
 
 
-def compute_overall_usage_significance(usage_df, val_df, cov_df, pcs=None):
+def compute_overall_usage_significance(usage_df, val_df, cov_df=None, pcs=None):
     X = val_df.values
-    C = cov_df.values
     Ys = usage_df.values
+    if cov_df is None:
+        C = np.ones(X.shape[0],1)
+    else:
+        C = cov_df.values
     ### Do PCA if that option is requested
     if pcs is not None:
         X = PCA(n_components=pcs, svd_solver="full").fit_transform(X)
@@ -806,13 +809,17 @@ def compute_overall_usage_significance(usage_df, val_df, cov_df, pcs=None):
             sig_df.loc["All_Annotations", usage_df.columns[i]] = results.f_pvalue
         else:
             sig_df.loc["All_Annotations", usage_df.columns[i]] = np.nan
+    sig_df = sig_df.astype(np.float64)
     return sig_df
 
 
-def compute_single_annot_usage_significance(usage_df, val_df, cov_df):
+def compute_single_annot_usage_significance(usage_df, val_df, cov_df=None):
     X = val_df.values
-    C = cov_df.values
     Ys = usage_df.values
+    if cov_df is None:
+        C = np.ones(X.shape[0],1)
+    else:
+        C = cov_df.values
     ### Project out C
     X_proj = X - LinearRegression(fit_intercept=True).fit(C, X).predict(C)
     Ys_proj = Ys - LinearRegression(fit_intercept=True).fit(C, Ys).predict(C)
@@ -827,6 +834,7 @@ def compute_single_annot_usage_significance(usage_df, val_df, cov_df):
                 sig_df.loc[val_df.columns.values[j], usage_df.columns[i]] = 1 - scipy.stats.t.cdf(results.tvalues[0], df=results.df_resid)
             else:
                 sig_df.loc[val_df.columns.values[j], usage_df.columns[i]] = np.nan
+    sig_df = sig_df.astype(np.float64)
     return sig_df
 
 ### --------------------------------- MAIN --------------------------------- ###
@@ -1296,7 +1304,8 @@ def cnmf_validate_main(config_dict):
         covariate_df = sub_validation_df.loc[:,[]].merge(covariate_df, how="left", left_index=True, right_index=True)
         assert pd.isnull(covariate_df).values.any() == False, "If custom_covariate_table is provided, you must ensure there is a row for every gene that appears in both {} and {}".format(config_dict["out_dir"] + "/" + config_dict["name"] + "/" + config_dict["name"] + ".filt_usage.tsv", config_dict["validation_table"])
     else:
-        raise ValueError("At least one of pops_out_prefix and custom_covariate_table must be provided")
+        logging.info("No covariates provided.")
+        covariate_df = None
 
     ### Compute enrichments
     logging.info("Computing and saving overall usage significances")
