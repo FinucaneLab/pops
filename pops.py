@@ -790,7 +790,7 @@ def compute_overall_usage_significance(usage_df, val_df, cov_df=None, pcs=None):
     X = val_df.values
     Ys = usage_df.values
     if cov_df is None:
-        C = np.ones(X.shape[0],1)
+        C = np.ones((X.shape[0],1))
     else:
         C = cov_df.values
     ### Do PCA if that option is requested
@@ -817,7 +817,7 @@ def compute_single_annot_usage_significance(usage_df, val_df, cov_df=None):
     X = val_df.values
     Ys = usage_df.values
     if cov_df is None:
-        C = np.ones(X.shape[0],1)
+        C = np.ones((X.shape[0],1))
     else:
         C = cov_df.values
     ### Project out C
