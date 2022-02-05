@@ -300,14 +300,19 @@ def block_BA(A, block_labels, B):
     return new_B
 
 
-def regularize_error_cov(error_cov, Y, Y_ids, gene_annot_df):
+def regularize_error_cov(error_cov, Y_ids, gene_annot_df, max_ratio=10):
+    assert max_ratio > 1, "max_ratio must be greater than 1"
     Y_chr = gene_annot_df.loc[Y_ids].CHR.values
-    min_lambda = 0
+    min_lambda = np.inf
+    max_lambda = -np.inf
     for c in set(Y_chr):
         subset_ind = Y_chr == c
         W = np.linalg.eigvalsh(error_cov[np.ix_(subset_ind, subset_ind)])
         min_lambda = min(min_lambda, min(W))
-    ridge = abs(min(min_lambda, 0))+.05+.9*max(0, np.var(Y)-1)
+        max_lambda = max(max_lambda, max(W))
+    if np.isinf(min_lambda) or np.isinf(max_lambda):
+        raise ValueError("No eigenvalues computed; probably Y_ids is an empty list.")
+    ridge = max(0, (max_lambda - max_ratio * min_lambda) / (max_ratio - 1))
     return error_cov + np.eye(error_cov.shape[0]) * ridge
 
 
@@ -888,7 +893,7 @@ def pops_predict_main(config_dict):
         ### Regularize MAGMA error covariance if using
         if error_cov is not None:
             logging.info("Regularizing MAGMA error covariance.")
-            error_cov = regularize_error_cov(error_cov, Y, Y_ids, gene_annot_df)
+            error_cov = regularize_error_cov(error_cov, Y_ids, gene_annot_df)
     elif config_dict["y_path"] is not None:
         logging.info("Reading scores from {}.".format(config_dict["y_path"]))
         if config_dict["y_covariates_path"] is not None:
