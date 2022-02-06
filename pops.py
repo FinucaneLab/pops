@@ -1093,12 +1093,14 @@ def cnmf_prepare_main(config_dict):
     coefs_df = coefs_df.loc[~coefs_df.index.isin(["METHOD", "SELECTED_CV_ALPHA", "BEST_CV_SCORE"])]
     coefs_df["beta"] = coefs_df["beta"].astype(np.float64)
     if config_dict["custom_train_genes"] is not None:
-        logging.info("Using custom training genes from {}".format(config_dict["custom_train_genes"]))
+        logging.info("Using custom training genes from {} (note that this overrides pops_out_prefix and num_train_genes)".format(config_dict["custom_train_genes"]))
         train_genes = np.loadtxt(config_dict["custom_train_genes"], dtype=str).flatten()
-    else:
+    elif config_dict["pops_out_prefix"] is not None:
         logging.info("Defining top {} PoPS genes as training genes".format(str(config_dict["num_train_genes"])))
         pred_df = pd.read_csv(config_dict["pops_out_prefix"] + ".preds", sep="\t", index_col=0)
         train_genes = pred_df.sort_values("PoPS_Score", ascending=False).index.values[:config_dict["num_train_genes"]]
+    else:
+        raise ValueError("At least one of custom_train_genes and pops_out_prefix must be provided.")
     ### Read in feature matrix
     logging.info("Reading feature matrix from {}".format(config_dict["feature_mat_prefix"]))
     mat, cols, rows = load_feature_matrix(config_dict["feature_mat_prefix"], config_dict["num_feature_chunks"], coefs_df.index.values)
