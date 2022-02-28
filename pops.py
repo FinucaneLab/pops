@@ -18,6 +18,8 @@ from sklearn.decomposition import non_negative_factorization, PCA
 from sklearn.cluster import KMeans, AgglomerativeClustering
 from collections import Counter
 
+import itertools
+
 ### --------------------------------- PROGRAM INPUTS --------------------------------- ###
 
 def get_args(argv=None):
@@ -95,19 +97,19 @@ def get_args(argv=None):
     cnmf_combine_parser.add_argument("--name", help="...")
     cnmf_combine_parser.add_argument("--local_neighborhood_size", type=float, default=0.3, help="...")
     cnmf_combine_parser.add_argument("--percentage_trim", type=float, default=0.1, help="...")
-    cnmf_combine_parser.add_argument("--cosine_thresh", type=float, default=0.8, help="...")
+    cnmf_combine_parser.add_argument("--gene_set_max_size", type=int, default=300, help="...")
+    cnmf_combine_parser.add_argument("--gene_set_min_size", type=int, default=20, help="...")
     cnmf_combine_parser.add_argument("--random_seed", type=int, default=42, help="...")
     cnmf_combine_parser.add_argument('--verbose', dest='verbose', action='store_true')
     cnmf_combine_parser.add_argument('--no_verbose', dest='verbose', action='store_false')
-    ### Add alternative arguments for clustering / trimming, etc.
     ### cnmf_validate arguments
     cnmf_validate_parser = subparsers.add_parser('cnmf_validate', help="...")
-    cnmf_validate_parser.add_argument("--out_dir", help="...")
-    cnmf_validate_parser.add_argument("--name", help="...")
+    cnmf_validate_parser.add_argument("--usage_path", help="...")
     cnmf_validate_parser.add_argument("--pops_out_prefix", help="...")
     cnmf_validate_parser.add_argument("--custom_covariate_table", help="...")
-    cnmf_validate_parser.add_argument("--validation_table", help="...")
+    cnmf_validate_parser.add_argument("--validation_table_path", help="...")
     cnmf_validate_parser.add_argument("--num_pcs", type=int, nargs="*", help="...")
+    cnmf_validate_parser.add_argument("--out_prefix", help="...")
     cnmf_validate_parser.add_argument('--verbose', dest='verbose', action='store_true')
     cnmf_validate_parser.add_argument('--no_verbose', dest='verbose', action='store_false')
     return parser.parse_args(argv)
@@ -771,27 +773,36 @@ def compute_robustness(X, rows, X_train, Y_train, alpha, num_resamples, random_s
     return resample_preds_df
 
 
-def prune_cnmf_components(all_comp_df, all_usage_df, k_components_list, cosine_thresh=0.9):
-    cosine = all_usage_df.T.dot(all_usage_df)
-    cosine = pd.DataFrame(cosine.values / np.sqrt((np.diagonal(cosine.values) * np.diagonal(cosine.values).reshape(-1,1))),
-                          index=cosine.index.values, columns=cosine.columns.values)
-    cosine_masked = cosine * (1 - scipy.linalg.block_diag(*[np.ones((k,k)) for k in k_components_list]))
-    clust = AgglomerativeClustering(n_clusters=None,
-                                    affinity="precomputed",
-                                    linkage="single",
-                                    distance_threshold=1-cosine_thresh).fit(1-cosine_masked)
-    ### If redundant components, we use the one from the smallest k, since hopefully more stable.
-    ### Assumes components are ordered in order of increasing k.
-    use_components = []
-    for c in sorted(set(clust.labels_)):
-        use_components.append(cosine.columns.values[clust.labels_ == c][0])
-    use_components = sorted(use_components, key=lambda x: np.where(all_comp_df.index.values == x)[0][0])
-    filt_comp_df = all_comp_df.loc[use_components]
-    filt_usage_df = all_usage_df.loc[:,use_components]
-    return filt_comp_df, filt_usage_df
+def kmeans_2_1d(v):
+    v = np.array(v)
+    argsort_v = np.argsort(v)
+    best_wcss = np.inf
+    best_ind = None
+    for i in range(1,len(v)):
+        wcss = np.var(v[argsort_v[:i]]) * i + np.var(v[argsort_v[i:]]) * (len(v) - i)
+        if wcss < best_wcss:
+            best_wcss = wcss
+            best_ind = i
+    clust1, clust2 = argsort_v[:best_ind], argsort_v[best_ind:]
+    return clust1, clust2
 
 
-def compute_overall_usage_significance(usage_df, val_df, cov_df=None, pcs=None):
+def binarize_components(usage_df, max_size, min_size):
+    all_lb = []
+    for comp in usage_df.columns:
+        clust1, clust2 = kmeans_2_1d(usage_df.loc[:,comp].values)
+        lb = usage_df.loc[:,comp].iloc[clust2].min()
+        if max_size is not None:
+            lb = max(lb, np.sort(usage_df.loc[:,comp])[-max_size])
+        if min_size is not None:
+            lb = min(lb, np.sort(usage_df.loc[:,comp])[-min_size])
+        all_lb.append(lb)
+    all_lb = np.array(all_lb)
+    bin_usage_df = (usage_df >= all_lb).astype(np.float64)
+    return bin_usage_df
+
+
+def compute_overall_usage_enrichment(usage_df, val_df, cov_df=None, pcs=None):
     X = val_df.values
     Ys = usage_df.values
     if cov_df is None:
@@ -807,40 +818,46 @@ def compute_overall_usage_significance(usage_df, val_df, cov_df=None, pcs=None):
     ### Only use features with substantial leftover variance (for stability in case we include exact trait)
     use_features = X_proj.var(axis=0) > 0.01
     ### Compute p-values
-    sig_df = pd.DataFrame(columns=usage_df.columns)
+    enrich_df = pd.DataFrame(columns=usage_df.columns)
     for i in range(Ys.shape[1]):
         if use_features.sum() > 0:
             results = sm.OLS(Ys_proj[:,i], X_proj[:,use_features]).fit()
-            sig_df.loc["All_Annotations", usage_df.columns[i]] = results.f_pvalue
+            enrich_df.loc["All_Annotations", usage_df.columns[i]] = results.f_pvalue
         else:
-            sig_df.loc["All_Annotations", usage_df.columns[i]] = np.nan
-    sig_df = sig_df.astype(np.float64)
-    return sig_df
+            enrich_df.loc["All_Annotations", usage_df.columns[i]] = np.nan
+    enrich_df = enrich_df.astype(np.float64)
+    return enrich_df
 
 
-def compute_single_annot_usage_significance(usage_df, val_df, cov_df=None):
-    X = val_df.values
-    Ys = usage_df.values
+def compute_single_annot_usage_enrichment(usage_df, val_df, cov_df=None):
+    Xs = usage_df.values
+    Ys = val_df.values
     if cov_df is None:
-        C = np.ones((X.shape[0],1))
+        C = np.ones((Xs.shape[0],1))
     else:
         C = cov_df.values
     ### Project out C
-    X_proj = X - LinearRegression(fit_intercept=True).fit(C, X).predict(C)
+    Xs_proj = Xs - LinearRegression(fit_intercept=True).fit(C, Xs).predict(C)
     Ys_proj = Ys - LinearRegression(fit_intercept=True).fit(C, Ys).predict(C)
     ### Only use features with non-trivial leftover variance (for stability in case we include exact trait)
-    use_features = X_proj.var(axis=0) > 0.01
+    use_features = Ys_proj.var(axis=0) > 0.01
     ### Compute p-values
-    sig_df = pd.DataFrame(columns=usage_df.columns)
-    for j in range(X.shape[1]):
-        for i in range(Ys.shape[1]):
-            if use_features[j]:
-                results = sm.OLS(Ys_proj[:,i], X_proj[:,[j]]).fit()
-                sig_df.loc[val_df.columns.values[j], usage_df.columns[i]] = 1 - scipy.stats.t.cdf(results.tvalues[0], df=results.df_resid)
+    multicol = pd.MultiIndex.from_tuples(itertools.product(["coef", "se", "pvalue"], usage_df.columns),
+                                         names=["statistic", "trait"])
+    enrich_df = pd.DataFrame(columns=multicol, index=val_df.columns)
+    for i in range(Ys.shape[1]):
+        for j in range(Xs.shape[1]):
+            if use_features[i]:
+                results = sm.OLS(Ys_proj[:,i], Xs_proj[:,[j]]).fit()
+                enrich_df.loc[val_df.columns.values[i], ("coef", usage_df.columns[j])] = results.params[0]
+                enrich_df.loc[val_df.columns.values[i], ("se", usage_df.columns[j])] = results.bse[0]
+                enrich_df.loc[val_df.columns.values[i], ("pvalue", usage_df.columns[j])] = 1 - scipy.stats.t.cdf(results.tvalues[0], df=results.df_resid)
             else:
-                sig_df.loc[val_df.columns.values[j], usage_df.columns[i]] = np.nan
-    sig_df = sig_df.astype(np.float64)
-    return sig_df
+                enrich_df.loc[val_df.columns.values[i], ("coef", usage_df.columns[j])] = np.nan
+                enrich_df.loc[val_df.columns.values[i], ("se", usage_df.columns[j])] = np.nan
+                enrich_df.loc[val_df.columns.values[i], ("pvalue", usage_df.columns[j])] = np.nan
+    enrich_df = enrich_df.astype(np.float64)
+    return enrich_df
 
 ### --------------------------------- MAIN --------------------------------- ###
 
@@ -1252,22 +1269,26 @@ def cnmf_combine_main(config_dict):
 
     ### Combine spectra/usage into single dataframe
     logging.info("Combining results across all k")
-    all_comp_df = pd.concat([k_spectra_dict[k] for k in k_components_list], axis=0)
-    all_usage_df = pd.concat([k_usage_dict[k] for k in k_components_list], axis=1)
+    comp_df = pd.concat([k_spectra_dict[k] for k in k_components_list], axis=0)
+    usage_df = pd.concat([k_usage_dict[k] for k in k_components_list], axis=1)
 
-    ### Prune redundant components
-    logging.info("Pruning redundant components")
-    filt_comp_df, filt_usage_df = prune_cnmf_components(all_comp_df, all_usage_df, k_components_list, cosine_thresh=config_dict["cosine_thresh"])
-    logging.info("{}/{} components retained".format(filt_comp_df.shape[0], all_comp_df.shape[0]))
+    ### Construct gene sets
+    logging.info("Binarizing usage vectors to gene sets")
+    bin_usage_df = binarize_components(usage_df, max_size=config_dict["gene_set_max_size"], min_size=config_dict["gene_set_min_size"])
+    
+    ### Compute Jaccard similarity between gene sets
+    overlap = bin_usage_df.values.T.dot(bin_usage_df.values)
+    J = overlap / (np.diagonal(overlap) + np.diagonal(overlap).reshape(-1,1) - overlap)
+    jaccard_df = pd.DataFrame(J, index=bin_usage_df.columns, columns=bin_usage_df.columns)
 
     ### Save
     logging.info("Saving results to {}".format(config_dict["out_dir"] + "/" + config_dict["name"] + "/"))
-    all_comp_df.to_csv(config_dict["out_dir"] + "/" + config_dict["name"] + "/" + config_dict["name"] + ".all_comp.tsv", sep="\t")
-    all_usage_df.to_csv(config_dict["out_dir"] + "/" + config_dict["name"] + "/" + config_dict["name"] + ".all_usage.tsv", sep="\t")
-    filt_comp_df.to_csv(config_dict["out_dir"] + "/" + config_dict["name"] + "/" + config_dict["name"] + ".filt_comp.tsv", sep="\t")
-    filt_usage_df.to_csv(config_dict["out_dir"] + "/" + config_dict["name"] + "/" + config_dict["name"] + ".filt_usage.tsv", sep="\t")
+    comp_df.to_csv(config_dict["out_dir"] + "/" + config_dict["name"] + "/" + config_dict["name"] + ".component", sep="\t")
+    usage_df.to_csv(config_dict["out_dir"] + "/" + config_dict["name"] + "/" + config_dict["name"] + ".usage", sep="\t")
+    bin_usage_df.to_csv(config_dict["out_dir"] + "/" + config_dict["name"] + "/" + config_dict["name"] + ".geneset", sep="\t")
+    jaccard_df.to_csv(config_dict["out_dir"] + "/" + config_dict["name"] + "/" + config_dict["name"] + ".geneset_sim", sep="\t")
 
-
+    
 def cnmf_validate_main(config_dict):
     ### --------------------------------- Basic settings --------------------------------- ###
     ### Set logging settings
@@ -1282,13 +1303,12 @@ def cnmf_validate_main(config_dict):
     
     ### --------------------------------- Validate --------------------------------- ###
     ### Load data, check types, and process
-    logging.info("Loading data from {}".format(config_dict["out_dir"] + "/" + config_dict["name"] + "/"))
-    filt_usage_df = pd.read_csv(config_dict["out_dir"] + "/" + config_dict["name"] + "/" + config_dict["name"] + ".filt_usage.tsv",
-                                sep="\t", index_col=0)
-    validation_df = pd.read_csv(config_dict["validation_table"], sep="\t", index_col=0)
+    logging.info("Loading data from {} and {}".format(config_dict["usage_path"], config_dict["validation_table_path"]))
+    usage_df = pd.read_csv(config_dict["usage_path"], sep="\t", index_col=0)
+    validation_df = pd.read_csv(config_dict["validation_table_path"], sep="\t", index_col=0)
     assert pd.isnull(validation_df).values.any() == False, "Missing values in validation table"
-    genes_to_use = sorted(list(set(validation_df.index.values).intersection(filt_usage_df.index.values)))
-    sub_filt_usage_df = filt_usage_df.loc[genes_to_use]
+    genes_to_use = sorted(list(set(validation_df.index.values).intersection(usage_df.index.values)))
+    sub_usage_df = usage_df.loc[genes_to_use]
     sub_validation_df = validation_df.loc[genes_to_use]
     sub_validation_df = (sub_validation_df - sub_validation_df.mean(axis=0)) / sub_validation_df.std(axis=0)
 
@@ -1309,23 +1329,23 @@ def cnmf_validate_main(config_dict):
         logging.info("pops_out_prefix not provided but custom_covariate_table provided, reading covariates from {}".format(config_dict["custom_covariate_table"]))
         covariate_df = pd.read_csv(config_dict["custom_covariate_table"], sep="\t", index_col=0)
         covariate_df = sub_validation_df.loc[:,[]].merge(covariate_df, how="left", left_index=True, right_index=True)
-        assert pd.isnull(covariate_df).values.any() == False, "If custom_covariate_table is provided, you must ensure there is a row for every gene that appears in both {} and {}".format(config_dict["out_dir"] + "/" + config_dict["name"] + "/" + config_dict["name"] + ".filt_usage.tsv", config_dict["validation_table"])
+        assert pd.isnull(covariate_df).values.any() == False, "If custom_covariate_table is provided, you must ensure there is a row for every gene that appears in both {} and {}".format(config_dict["usage_path"], config_dict["validation_table_path"])
     else:
         logging.info("No covariates provided.")
         covariate_df = None
 
     ### Compute enrichments
-    logging.info("Computing and saving overall usage significances")
-    sig_overall_df = compute_overall_usage_significance(sub_filt_usage_df, sub_validation_df, covariate_df, pcs=None)
-    sig_overall_df.to_csv(config_dict["out_dir"] + "/" + config_dict["name"] + "/" + config_dict["name"] + ".overall_sig.tsv", sep="\t")
-    logging.info("Computing and saving per annotation usage significances")
-    sig_per_annot_df = compute_single_annot_usage_significance(sub_filt_usage_df, sub_validation_df, covariate_df)
-    sig_per_annot_df.to_csv(config_dict["out_dir"] + "/" + config_dict["name"] + "/" + config_dict["name"] + ".single_sig.tsv", sep="\t")
+    logging.info("Computing and saving overall usage enrichments")
+    enrich_overall_df = compute_overall_usage_enrichment(sub_usage_df, sub_validation_df, covariate_df, pcs=None)
+    enrich_overall_df.to_csv(config_dict["out_prefix"] + ".all.enrichment", sep="\t")
+    logging.info("Computing and saving per annotation usage enrichments")
+    enrich_per_annot_df = compute_single_annot_usage_enrichment(sub_usage_df, sub_validation_df, covariate_df)
+    enrich_per_annot_df.to_csv(config_dict["out_prefix"] + ".single.enrichment", sep="\t")
     if config_dict["num_pcs"] is not None:
         for n_pc in config_dict["num_pcs"]:
-            logging.info("Computing and saving PC{} usage significances".format(str(n_pc)))
-            sig_pc_df = compute_overall_usage_significance(sub_filt_usage_df, sub_validation_df, covariate_df, pcs=n_pc)
-            sig_pc_df.to_csv(config_dict["out_dir"] + "/" + config_dict["name"] + "/" + config_dict["name"] + ".pc{}_sig.tsv".format(str(n_pc)), sep="\t")
+            logging.info("Computing and saving PC{} usage enrichments".format(str(n_pc)))
+            enrich_pc_df = compute_overall_usage_enrichment(sub_usage_df, sub_validation_df, covariate_df, pcs=n_pc)
+            enrich_pc_df.to_csv(config_dict["out_prefix"] + ".pc{}.enrichment".format(str(n_pc)), sep="\t")
 
 
 ### Main
