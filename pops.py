@@ -1285,7 +1285,7 @@ def cnmf_combine_main(config_dict):
     logging.info("Saving results to {}".format(config_dict["out_dir"] + "/" + config_dict["name"] + "/"))
     comp_df.to_csv(config_dict["out_dir"] + "/" + config_dict["name"] + "/" + config_dict["name"] + ".component", sep="\t")
     usage_df.to_csv(config_dict["out_dir"] + "/" + config_dict["name"] + "/" + config_dict["name"] + ".usage", sep="\t")
-    bin_usage_df.to_csv(config_dict["out_dir"] + "/" + config_dict["name"] + "/" + config_dict["name"] + ".geneset", sep="\t")
+    bin_usage_df.astype(int).to_csv(config_dict["out_dir"] + "/" + config_dict["name"] + "/" + config_dict["name"] + ".geneset", sep="\t")
     jaccard_df.to_csv(config_dict["out_dir"] + "/" + config_dict["name"] + "/" + config_dict["name"] + ".geneset_sim", sep="\t")
 
     
@@ -1304,8 +1304,8 @@ def cnmf_validate_main(config_dict):
     ### --------------------------------- Validate --------------------------------- ###
     ### Load data, check types, and process
     logging.info("Loading data from {} and {}".format(config_dict["usage_path"], config_dict["validation_table_path"]))
-    usage_df = pd.read_csv(config_dict["usage_path"], sep="\t", index_col=0)
-    validation_df = pd.read_csv(config_dict["validation_table_path"], sep="\t", index_col=0)
+    usage_df = pd.read_csv(config_dict["usage_path"], sep="\t", index_col=0).astype(np.float64)
+    validation_df = pd.read_csv(config_dict["validation_table_path"], sep="\t", index_col=0).astype(np.float64)
     assert pd.isnull(validation_df).values.any() == False, "Missing values in validation table"
     genes_to_use = sorted(list(set(validation_df.index.values).intersection(usage_df.index.values)))
     sub_usage_df = usage_df.loc[genes_to_use]
