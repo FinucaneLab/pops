@@ -106,10 +106,11 @@ def get_args(argv=None):
     cnmf_validate_parser = subparsers.add_parser('cnmf_validate', help="...")
     cnmf_validate_parser.add_argument("--usage_path", help="...")
     cnmf_validate_parser.add_argument("--pops_out_prefix", help="...")
+    cnmf_validate_parser.add_argument("--gene_covariates_path", help="...")
     cnmf_validate_parser.add_argument("--custom_covariate_table", help="...")
     cnmf_validate_parser.add_argument("--validation_table_path", help="...")
-    cnmf_validate_parser.add_argument("--num_pcs", type=int, nargs="*", help="...")
-    cnmf_validate_parser.add_argument("--out_prefix", help="...")
+    cnmf_validate_parser.add_argument("--validation_errors_path", help="...")
+    cnmf_validate_parser.add_argument("--save_path", help="...")
     cnmf_validate_parser.add_argument('--verbose', dest='verbose', action='store_true')
     cnmf_validate_parser.add_argument('--no_verbose', dest='verbose', action='store_false')
     return parser.parse_args(argv)
@@ -802,60 +803,35 @@ def binarize_components(usage_df, max_size, min_size):
     return bin_usage_df
 
 
-def compute_overall_usage_enrichment(usage_df, val_df, cov_df=None, pcs=None):
-    X = val_df.values
-    Ys = usage_df.values
-    if cov_df is None:
-        C = np.ones((X.shape[0],1))
-    else:
-        C = cov_df.values
-    ### Do PCA if that option is requested
-    if pcs is not None:
-        X = PCA(n_components=pcs, svd_solver="full").fit_transform(X)
-    ### Project out C
-    X_proj = X - LinearRegression(fit_intercept=True).fit(C, X).predict(C)
-    Ys_proj = Ys - LinearRegression(fit_intercept=True).fit(C, Ys).predict(C)
-    ### Only use features with substantial leftover variance (for stability in case we include exact trait)
-    use_features = X_proj.var(axis=0) > 0.01
-    ### Compute p-values
-    enrich_df = pd.DataFrame(columns=usage_df.columns)
-    for i in range(Ys.shape[1]):
-        if use_features.sum() > 0:
-            results = sm.OLS(Ys_proj[:,i], X_proj[:,use_features]).fit()
-            enrich_df.loc["All_Annotations", usage_df.columns[i]] = results.f_pvalue
-        else:
-            enrich_df.loc["All_Annotations", usage_df.columns[i]] = np.nan
-    enrich_df = enrich_df.astype(np.float64)
-    return enrich_df
+def add_intercept(df):
+    intercept_col = ((df == df.min()) | (df == df.max())).all(axis=0)
+    if not intercept_col.any():
+        assert "INTERCEPT" not in df.columns, "Column named INTERCEPT but not intercept detected."
+        new_df = df.copy()
+        new_df["INTERCEPT"] = 1.
+        return new_df
+    return df
 
 
-def compute_single_annot_usage_enrichment(usage_df, val_df, cov_df=None):
-    Xs = usage_df.values
-    Ys = val_df.values
+def compute_enrichments(usage_df, val_df, cov_df=None, err_df=None):
     if cov_df is None:
-        C = np.ones((Xs.shape[0],1))
-    else:
-        C = cov_df.values
-    ### Project out C
-    Xs_proj = Xs - LinearRegression(fit_intercept=True).fit(C, Xs).predict(C)
-    Ys_proj = Ys - LinearRegression(fit_intercept=True).fit(C, Ys).predict(C)
-    ### Only use features with non-trivial leftover variance (for stability in case we include exact trait)
-    use_features = Ys_proj.var(axis=0) > 0.01
-    ### Compute p-values
+        cov_df = pd.DataFrame(index=val_df.index)
+        cov_df["INTERCEPT"] = 1.
+    cov_df = add_intercept(cov_df)
+    if err_df is None:
+        err_df = val_df.copy()
+        err_df[:] = 1.
     multicol = pd.MultiIndex.from_tuples(itertools.product(["coef", "se", "pvalue"], usage_df.columns),
                                          names=["statistic", "trait"])
     enrich_df = pd.DataFrame(columns=multicol, index=val_df.columns)
-    for i in range(Ys.shape[1]):
-        for j in range(Xs.shape[1]):
-            if use_features[i]:
-                results = sm.OLS(Ys_proj[:,i], Xs_proj[:,[j]]).fit()
-                enrich_df.loc[val_df.columns.values[i], ("coef", usage_df.columns[j])] = results.params[0]
-                enrich_df.loc[val_df.columns.values[i], ("se", usage_df.columns[j])] = results.bse[0]
-                enrich_df.loc[val_df.columns.values[i], ("pvalue", usage_df.columns[j])] = 1 - scipy.stats.t.cdf(results.tvalues[0], df=results.df_resid)
-            else:
-                enrich_df.loc[val_df.columns.values[i], ("coef", usage_df.columns[j])] = np.nan
-                enrich_df.loc[val_df.columns.values[i], ("se", usage_df.columns[j])] = np.nan
-                enrich_df.loc[val_df.columns.values[i], ("pvalue", usage_df.columns[j])] = np.nan
+    for t in val_df.columns:
+        for c in usage_df.columns:
+            X_C = np.hstack((usage_df.loc[:,[c]].values, cov_df.values))
+            results = sm.WLS(val_df.loc[:,t].values, X_C, weights=1./err_df.loc[:,t].values).fit()
+            if not np.isclose(results.params[0], 0):
+                enrich_df.loc[t, ("coef", c)] = results.params[0]
+                enrich_df.loc[t, ("se", c)] = results.bse[0]
+                enrich_df.loc[t, ("pvalue", c)] = 1 - scipy.stats.t.cdf(results.tvalues[0], df=results.df_resid)
     enrich_df = enrich_df.astype(np.float64)
     return enrich_df
 
@@ -1288,7 +1264,7 @@ def cnmf_combine_main(config_dict):
     bin_usage_df.astype(int).to_csv(config_dict["out_dir"] + "/" + config_dict["name"] + "/" + config_dict["name"] + ".geneset", sep="\t")
     jaccard_df.to_csv(config_dict["out_dir"] + "/" + config_dict["name"] + "/" + config_dict["name"] + ".geneset_sim", sep="\t")
 
-    
+
 def cnmf_validate_main(config_dict):
     ### --------------------------------- Basic settings --------------------------------- ###
     ### Set logging settings
@@ -1300,52 +1276,60 @@ def cnmf_validate_main(config_dict):
 
     ### Display configs
     logging.info("Config dict = {}".format(str(config_dict)))
-    
+
     ### --------------------------------- Validate --------------------------------- ###
     ### Load data, check types, and process
     logging.info("Loading data from {} and {}".format(config_dict["usage_path"], config_dict["validation_table_path"]))
     usage_df = pd.read_csv(config_dict["usage_path"], sep="\t", index_col=0).astype(np.float64)
     validation_df = pd.read_csv(config_dict["validation_table_path"], sep="\t", index_col=0).astype(np.float64)
     assert pd.isnull(validation_df).values.any() == False, "Missing values in validation table"
-    genes_to_use = sorted(list(set(validation_df.index.values).intersection(usage_df.index.values)))
+    assert set(validation_df.index.values).issubset(usage_df.index.values), "Validation table cannot contain genes which don't appear in {}".format(config_dict["usage_path"])
+    genes_to_use = validation_df.index.values
     sub_usage_df = usage_df.loc[genes_to_use]
-    sub_validation_df = validation_df.loc[genes_to_use]
-    sub_validation_df = (sub_validation_df - sub_validation_df.mean(axis=0)) / sub_validation_df.std(axis=0)
+
+    ### Read and process error variance table
+    if config_dict["validation_errors_path"] is not None:
+        logging.info("Reading error variance from {}".format(config_dict["validation_errors_path"]))
+        err_df = pd.read_csv(config_dict["validation_errors_path"], sep="\t", index_col=0)
+        assert (err_df.index == validation_df.index).all(), "Indices of error table and validation table don't match"
+        assert (err_df.columns == validation_df.columns).all(), "Columns of error table and validation table don't match"
+    else:
+        logging.info("No error variance provided.")
+        err_df = None
 
     ### Read and process covariate table
-    if config_dict["pops_out_prefix"] is not None:
-        logging.info("pops_out_prefix provided, reading covariates from {}".format(config_dict["pops_out_prefix"] + ".preds"))
-        pops_pred = pd.read_csv(config_dict["pops_out_prefix"] + ".preds", sep="\t", index_col=0)
-        covariate_df = pops_pred.loc[:,["Y", "Y_proj"]]
-        covariate_df = sub_validation_df.loc[:,[]].merge(covariate_df, how="left", left_index=True, right_index=True)
-        covariate_df["Y"] = covariate_df["Y"].fillna(covariate_df["Y"].mean())
-        covariate_df["Y"] = (covariate_df["Y"] - covariate_df["Y"].mean()) / covariate_df["Y"].std()
-        covariate_df["Y_proj"] = covariate_df["Y_proj"].fillna(covariate_df["Y_proj"].mean())
-        covariate_df["Y_proj"] = (covariate_df["Y_proj"] - covariate_df["Y_proj"].mean()) / covariate_df["Y_proj"].std()
-        for p in range(2,4):
-            covariate_df["Y_{}".format(str(p))] = np.power(covariate_df["Y"], p)
-            covariate_df["Y_proj_{}".format(str(p))] = np.power(covariate_df["Y_proj"], p)
+    if config_dict["pops_out_prefix"] is not None or config_dict["gene_covariates_path"] is not None:
+        covariate_df = validation_df.loc[:,[]]
+        if config_dict["pops_out_prefix"] is not None:
+            logging.info("pops_out_prefix provided, reading covariates from {}".format(config_dict["pops_out_prefix"] + ".preds"))
+            pops_pred = pd.read_csv(config_dict["pops_out_prefix"] + ".preds", sep="\t", index_col=0)
+            covariate_df = covariate_df.merge(pops_pred.loc[:,["Y", "Y_proj"]], how="left", left_index=True, right_index=True)
+            covariate_df["Y"] = covariate_df["Y"].fillna(covariate_df["Y"].mean())
+            covariate_df["Y"] = (covariate_df["Y"] - covariate_df["Y"].mean()) / covariate_df["Y"].std()
+            covariate_df["Y_proj"] = covariate_df["Y_proj"].fillna(covariate_df["Y_proj"].mean())
+            covariate_df["Y_proj"] = (covariate_df["Y_proj"] - covariate_df["Y_proj"].mean()) / covariate_df["Y_proj"].std()
+            for p in range(2,4):
+                covariate_df["Y_{}".format(str(p))] = np.power(covariate_df["Y"], p)
+                covariate_df["Y_proj_{}".format(str(p))] = np.power(covariate_df["Y_proj"], p)
+        if config_dict["gene_covariates_path"] is not None:
+            logging.info("gene_covariates_path provided, reading covariates from {}".format(config_dict["gene_covariates_path"]))
+            gene_covariates = pd.read_csv(config_dict["gene_covariates_path"], sep="\t", index_col=0)
+            assert set(covariate_df.index.values).issubset(gene_covariates.index.values), "If gene covariates provided, they must be defined for all genes in {}".format(config_dict["validation_table_path"])
+            covariate_df = covariate_df.merge(gene_covariates, how="left", left_index=True, right_index=True)
     elif config_dict["custom_covariate_table"] is not None:
-        logging.info("pops_out_prefix not provided but custom_covariate_table provided, reading covariates from {}".format(config_dict["custom_covariate_table"]))
+        logging.info("pops_out_prefix and gene_covariates_path not provided, but custom_covariate_table provided; reading covariates from {}".format(config_dict["custom_covariate_table"]))
         covariate_df = pd.read_csv(config_dict["custom_covariate_table"], sep="\t", index_col=0)
         covariate_df = sub_validation_df.loc[:,[]].merge(covariate_df, how="left", left_index=True, right_index=True)
-        assert pd.isnull(covariate_df).values.any() == False, "If custom_covariate_table is provided, you must ensure there is a row for every gene that appears in both {} and {}".format(config_dict["usage_path"], config_dict["validation_table_path"])
+        assert pd.isnull(covariate_df).values.any() == False, "If custom_covariate_table is provided, covariates must be defined for all genes in {}".format(config_dict["validation_table_path"])
     else:
         logging.info("No covariates provided.")
         covariate_df = None
+    
+    ### Compute and save enrichments
+    logging.info("Computing and saving enrichments")
+    enrich_df = compute_enrichments(sub_usage_df, validation_df, cov_df=covariate_df, err_df=err_df)
+    enrich_df.to_csv(config_dict["save_path"], sep="\t")
 
-    ### Compute enrichments
-    logging.info("Computing and saving overall usage enrichments")
-    enrich_overall_df = compute_overall_usage_enrichment(sub_usage_df, sub_validation_df, covariate_df, pcs=None)
-    enrich_overall_df.to_csv(config_dict["out_prefix"] + ".all.enrichment", sep="\t")
-    logging.info("Computing and saving per annotation usage enrichments")
-    enrich_per_annot_df = compute_single_annot_usage_enrichment(sub_usage_df, sub_validation_df, covariate_df)
-    enrich_per_annot_df.to_csv(config_dict["out_prefix"] + ".single.enrichment", sep="\t")
-    if config_dict["num_pcs"] is not None:
-        for n_pc in config_dict["num_pcs"]:
-            logging.info("Computing and saving PC{} usage enrichments".format(str(n_pc)))
-            enrich_pc_df = compute_overall_usage_enrichment(sub_usage_df, sub_validation_df, covariate_df, pcs=n_pc)
-            enrich_pc_df.to_csv(config_dict["out_prefix"] + ".pc{}.enrichment".format(str(n_pc)), sep="\t")
 
 
 ### Main
