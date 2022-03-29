@@ -39,21 +39,35 @@ def load_df_from_npz(filename):
         obj = pd.DataFrame(**f)
     return obj
 
-def bar_chart_general(labels, values, ylabel=None, hlines=None, groups=None, group_color_dict=None, legend_mask=0):
+def prep_nlog_pval(nlog_pval, scores, effective_infinity):
+    all_vals = nlog_pval.values.flatten()
+    all_vals = all_vals[~np.isinf(all_vals) & ~pd.isnull(all_vals)]
+    max_meaningful_val = all_vals.max()
+    new_effective_infinity = max(effective_infinity, max_meaningful_val + 1)
+    shifted_scores = scores - scores.min().min() + 1
+    prep_nlog_pval = nlog_pval.replace(np.inf, new_effective_infinity)
+    prep_nlog_pval = prep_nlog_pval + np.isinf(nlog_pval) * shifted_scores
+    return prep_nlog_pval, max_meaningful_val
+
+def bar_chart_general(labels, values, max_value, ylabel=None, hlines=None, groups=None, group_color_dict=None, legend_mask=0):
     fig, ax = plt.subplots(1,1,figsize=(20,4))
     pos = np.arange(len(values))
+    clipped_values = np.minimum(values, max_value)
     if groups is not None:
         color = [group_color_dict[g] for g in groups]
     else:
         color = "#C3BEF7"
     if groups is not None and legend_mask > 0:
-        ax.bar(pos, list(values[:-legend_mask]) + [0] * legend_mask, color=color)
+        ax.bar(pos, list(clipped_values[:-legend_mask]) + [0] * legend_mask, color=color)
         ax.set_xticks(pos[:-legend_mask])
         ax.set_xticklabels(labels[:-legend_mask], rotation=45, ha="right")
     else:
-        ax.bar(pos, values, color=color)
+        ax.bar(pos, clipped_values, color=color)
         ax.set_xticks(pos)
         ax.set_xticklabels(labels, rotation=45, ha="right")
+    for i in range(len(values)):
+        if values[i] > max_value:
+            ax.scatter(pos[i], max_value + max_value * 0.01, s=80, marker=10, color="#999999")
     if groups is not None:
         if legend_mask:
             unique_groups = pd.DataFrame(groups[:-legend_mask]).iloc[:,0].unique()
@@ -95,7 +109,8 @@ parser.add_argument("--geneset_sim_path", help="")
 parser.add_argument("--usage_path", help="")
 parser.add_argument("--component_path", help="")
 parser.add_argument("--input_matrix_path", help="")
-parser.add_argument("--enrichment_path", help="")
+parser.add_argument("--magma_enrichment_path", help="")
+parser.add_argument("--epigenetic_enrichment_path", help="")
 parser.add_argument("--genes_of_interest_paths", nargs="*", default=[], help="")
 parser.add_argument("--genes_of_interest_set_names", nargs="*", default=[], help="")
 parser.add_argument("--out_prefix", help="")
@@ -104,6 +119,7 @@ parser.add_argument("--feature_meta_path", help="")
 parser.add_argument("--trait_meta_path", help="")
 parser.add_argument("--epigenetic_meta_path", help="")
 parser.add_argument("--sim_thresh", type=float, default=0.7, help="")
+parser.add_argument("--bar_nlog10_ylim", type=float, default=50, help="")
 args = parser.parse_args()
 config_dict = vars(args)
 
@@ -131,27 +147,37 @@ for bio_id in epigenetic_meta_df.biosample_id.unique():
     assert len(set(desc)) == 1, "Biosample ID to name mapping not 1 to 1"
     epi_bio_id_to_desc[bio_id] = desc[0]
 
-enrich_df = pd.read_csv(config_dict["enrichment_path"], sep="\t", header=[0,1])
-enrich_df = enrich_df.set_index(("statistic","trait"))
-enrich_df.index.name = "trait"
+magma_enrich_df = pd.read_csv(config_dict["magma_enrichment_path"], sep="\t", header=[0,1])
+magma_enrich_df = magma_enrich_df.set_index(("statistic","trait"))
+magma_enrich_df.index.name = "trait"
+epi_enrich_df = pd.read_csv(config_dict["epigenetic_enrichment_path"], sep="\t", header=[0,1])
+epi_enrich_df = epi_enrich_df.set_index(("statistic","trait"))
+epi_enrich_df.index.name = "trait"
 geneset_df = pd.read_csv(config_dict["geneset_path"], sep="\t", index_col=0)
 sim_df = pd.read_csv(config_dict["geneset_sim_path"], sep="\t", index_col=0)
 usage_df = pd.read_csv(config_dict["usage_path"], sep="\t", index_col=0)
 component_df = pd.read_csv(config_dict["component_path"], sep="\t", index_col=0)
 input_matrix = load_df_from_npz(config_dict["input_matrix_path"])
 
-enrich_magma_df = enrich_df.pvalue.loc[trait_meta_df.index.values]
-enrich_epi_df = enrich_df.pvalue.loc[epigenetic_meta_df.index.values]
-
-enrich_magma_z_df = enrich_df.coef.loc[trait_meta_df.index.values] / enrich_df.se.loc[trait_meta_df.index.values]
-enrich_epi_z_df = enrich_df.coef.loc[epigenetic_meta_df.index.values] / enrich_df.se.loc[epigenetic_meta_df.index.values]
-
-enrich_magma_bon_df = (enrich_magma_df < 0.05 / (~pd.isnull(enrich_magma_df)).sum(axis=0))
-enrich_epi_bon_df = (enrich_epi_df < 0.05 / (~pd.isnull(enrich_epi_df)).sum(axis=0))
+### Extract p-values
+magma_pval_df = magma_enrich_df.pvalue
+epi_pval_df = epi_enrich_df.pvalue
+### Get Bonferroni significant
+magma_pval_bon_df = (magma_pval_df < 0.05 / (~pd.isnull(magma_pval_df)).sum(axis=0))
+epi_pval_bon_df = (epi_pval_df < 0.05 / (~pd.isnull(epi_pval_df)).sum(axis=0))
+### Extract some quantitative score for ranking purposes
+magma_scores_df = magma_enrich_df.coef / magma_enrich_df.se
+epi_scores_df = epi_enrich_df.odds_ratio
+### Construct negative log10 p-value dataframe
+magma_nlog10_pval_df = -np.log10(magma_pval_df)
+epi_nlog10_pval_df = -np.log10(epi_pval_df)
+### Prep the negative log10 p-value data for ranking/visualization purposes
+prep_magma_nlog10_pval_df, magma_nlog10_pval_max_val = prep_nlog_pval(magma_nlog10_pval_df, magma_scores_df, config_dict["bar_nlog10_ylim"] + 1)
+prep_epi_nlog10_pval_df, epi_nlog10_pval_max_val = prep_nlog_pval(epi_nlog10_pval_df, epi_scores_df, config_dict["bar_nlog10_ylim"] + 1)
 
 ### Format component summary table
 
-component_summary = enrich_magma_bon_df.T.loc[:,[]].copy()
+component_summary = magma_pval_bon_df.T.loc[:,[]].copy()
 component_summary.columns.name = None
 component_summary.index.name = "component_id"
 
@@ -172,15 +198,15 @@ for c in component_summary.index:
     top_features_names = feature_meta_df.loc[top_features].Long_Name.values
     component_summary.loc[c,"top_features"] = " | ".join(top_features_names)
     ### Add phewas hits
-    phewas_hits = enrich_magma_bon_df.index[enrich_magma_bon_df.loc[:,c]]
-    sorted_phewas_hits = enrich_magma_z_df.loc[phewas_hits,c].sort_values(ascending=False).index.values
+    phewas_hits = magma_pval_bon_df.index[magma_pval_bon_df.loc[:,c]]
+    sorted_phewas_hits = prep_magma_nlog10_pval_df.loc[phewas_hits,c].sort_values(ascending=False).index.values
     top_phewas_hit_meta_ids = trait_meta_df.loc[sorted_phewas_hits].meta_id.unique()[:5]
     top_phewas_hit_names = [trait_meta_id_to_desc[i] for i in top_phewas_hit_meta_ids]
     component_summary.loc[c,"num_phewas_bon"] = len(phewas_hits)
     component_summary.loc[c,"top_phewas"] = " | ".join(top_phewas_hit_names)
     ### Add epigenetic hits
-    epi_hits = enrich_epi_bon_df.index[enrich_epi_bon_df.loc[:,c]]
-    sorted_epi_hits = enrich_epi_z_df.loc[epi_hits,c].sort_values(ascending=False).index.values
+    epi_hits = epi_pval_bon_df.index[epi_pval_bon_df.loc[:,c]]
+    sorted_epi_hits = prep_epi_nlog10_pval_df.loc[epi_hits,c].sort_values(ascending=False).index.values
     top_epi_hit_bio_ids = epigenetic_meta_df.loc[sorted_epi_hits].biosample_id.unique()[:5]
     top_epi_hit_names = [epi_bio_id_to_desc[i] for i in top_epi_hit_bio_ids]
     component_summary.loc[c,"num_epi_bon"] = len(epi_hits)
@@ -205,11 +231,11 @@ for p in phewas_summary.index:
     traits_in_meta = trait_meta_df[trait_meta_df.meta_id == p].index.values
     phewas_summary.loc[p,"num_traits"] = len(traits_in_meta)
     ### Summarize significant components
-    components_bon_any = enrich_magma_bon_df.columns[enrich_magma_bon_df.loc[traits_in_meta].any(axis=0)]
+    components_bon_any = magma_pval_bon_df.columns[magma_pval_bon_df.loc[traits_in_meta].any(axis=0)]
     phewas_summary.loc[p,"num_components_bon"] = len(components_bon_any)
     phewas_summary.loc[p,"eff_num_components_bon"] = component_summary.loc[components_bon_any].cluster_id.unique().shape[0]
-    phewas_summary.loc[p,"best_pval"] = enrich_magma_df.loc[traits_in_meta].min().min()
-    top_components = enrich_magma_z_df.loc[traits_in_meta].max().loc[components_bon_any].sort_values(ascending=False).index[:5]
+    phewas_summary.loc[p,"best_pval"] = magma_pval_df.loc[traits_in_meta].min().min()
+    top_components = prep_magma_nlog10_pval_df.loc[traits_in_meta].max().loc[components_bon_any].sort_values(ascending=False).index[:5]
     phewas_summary.loc[p,"top_components"] = " | ".join(top_components)    
 
 phewas_summary["num_traits"] = phewas_summary["num_traits"].astype(int)
@@ -228,11 +254,11 @@ for p in epi_summary.index:
     exp_in_meta = epigenetic_meta_df[epigenetic_meta_df.biosample_id == p].index.values
     epi_summary.loc[p,"num_experiments"] = len(exp_in_meta)
     ### Summarize significant components
-    components_bon_any = enrich_epi_bon_df.columns[enrich_epi_bon_df.loc[exp_in_meta].any(axis=0)]
+    components_bon_any = epi_pval_bon_df.columns[epi_pval_bon_df.loc[exp_in_meta].any(axis=0)]
     epi_summary.loc[p,"num_components_bon"] = len(components_bon_any)
     epi_summary.loc[p,"eff_num_components_bon"] = component_summary.loc[components_bon_any].cluster_id.unique().shape[0]
-    epi_summary.loc[p,"best_pval"] = enrich_epi_df.loc[exp_in_meta].min().min()
-    top_components = enrich_epi_z_df.loc[exp_in_meta].max().loc[components_bon_any].sort_values(ascending=False).index[:5]
+    epi_summary.loc[p,"best_pval"] = epi_pval_df.loc[exp_in_meta].min().min()
+    top_components = prep_epi_nlog10_pval_df.loc[exp_in_meta].max().loc[components_bon_any].sort_values(ascending=False).index[:5]
     epi_summary.loc[p,"top_components"] = " | ".join(top_components)
 
 epi_summary["num_experiments"] = epi_summary["num_experiments"].astype(int)
@@ -285,7 +311,7 @@ epi_summary.to_csv(config_dict["out_prefix"] + ".epi_summary.tsv", sep="\t")
 if len(config_dict["genes_of_interest_paths"]) != 0:
     comp_goi_summary.to_csv(config_dict["out_prefix"] + ".comp_goi_summary.tsv", sep="\t")
     goi_nn_summary.to_csv(config_dict["out_prefix"] + ".goi_nn_summary.tsv", sep="\t")
-    
+
 ### Reformat
 
 component_summary = component_summary.reset_index()
@@ -575,28 +601,27 @@ for i, cat in enumerate(trait_meta_df.category.unique()):
 ### Make directory for per-component plots
 Path(config_dict["out_prefix"] + "_raw_fig_dir/").mkdir(parents=True, exist_ok=True)
 
-for comp in enrich_df.pvalue.columns:
-    magma_marg_z = scipy.stats.norm.ppf(1 - 0.05)
-    magma_bon_z = scipy.stats.norm.ppf(1 - 0.05 / (~enrich_magma_df.loc[:,comp].isnull()).sum())
-    plotting_df = enrich_magma_df.loc[:,comp].to_frame().rename(columns={comp:"pval"})
-    plotting_df = pd.concat([plotting_df, enrich_magma_z_df.loc[:,comp].to_frame()], axis=1)
-    plotting_df = plotting_df.rename(columns={comp:"zscore"})
+for comp in magma_pval_df.columns:
+    marg_nlog10_pval = -np.log10(0.05)
+    bon_nlog10_pval = -np.log10(0.05 / (~magma_pval_df.loc[:,comp].isnull()).sum())
+    plotting_df = prep_magma_nlog10_pval_df.loc[:,comp].to_frame().rename(columns={comp:"nlog10_pval"})
     plotting_df = plotting_df.merge(trait_meta_df.loc[:,["meta_id", "category"]],
                                     how="left", left_index=True, right_index=True)
     grouped_plotting_df = []
     for mi in plotting_df.meta_id.unique():
         sub_plotting_df = plotting_df[plotting_df.meta_id == mi]
-        grouped_plotting_df.append(sub_plotting_df.iloc[sub_plotting_df.pval.argmin()])
+        grouped_plotting_df.append(sub_plotting_df.iloc[sub_plotting_df.nlog10_pval.argmax()])
     grouped_plotting_df = pd.DataFrame(grouped_plotting_df).reset_index().drop("index", axis=1).set_index("meta_id")
-    grouped_plotting_df = grouped_plotting_df.sort_values("zscore", ascending=False).iloc[:60]
+    grouped_plotting_df = grouped_plotting_df.sort_values("nlog10_pval", ascending=False).iloc[:60]
     sorted_grouped_plotting_df = []
     for cat in grouped_plotting_df.category.unique():
         sorted_grouped_plotting_df.append(grouped_plotting_df[grouped_plotting_df.category == cat])
     sorted_grouped_plotting_df = pd.concat(sorted_grouped_plotting_df, axis=0)
     bar_chart_general([abbreviate(l.replace("_", " "), max_len=30) for l in sorted_grouped_plotting_df.index.values],
-                      np.maximum(sorted_grouped_plotting_df.zscore.values, 0),
-                      ylabel="Z-score",
-                      hlines=[magma_marg_z,magma_bon_z],
+                      np.maximum(sorted_grouped_plotting_df.nlog10_pval.values, 0),
+                      config_dict["bar_nlog10_ylim"],
+                      ylabel="-log10 p-value",
+                      hlines=[marg_nlog10_pval,bon_nlog10_pval],
                       groups=sorted_grouped_plotting_df.category.values,
                       group_color_dict=cat_color_dict,
                       legend_mask=4)
@@ -604,23 +629,23 @@ for comp in enrich_df.pvalue.columns:
                 dpi=300, bbox_inches="tight")
     plt.close()
 
-for comp in enrich_df.pvalue.columns:
-    epi_marg_z = scipy.stats.norm.ppf(1 - 0.05)
-    epi_bon_z = scipy.stats.norm.ppf(1 - 0.05 / (~enrich_epi_df.loc[:,comp].isnull()).sum())
-    plotting_df = enrich_epi_df.loc[:,comp].to_frame().rename(columns={comp:"pval"})
-    plotting_df = pd.concat([plotting_df, enrich_epi_z_df.loc[:,comp].to_frame()], axis=1)
-    plotting_df = plotting_df.rename(columns={comp:"zscore"})
+for comp in epi_pval_df.columns:
+    marg_nlog10_pval = -np.log10(0.05)
+    bon_nlog10_pval = -np.log10(0.05 / (~epi_pval_df.loc[:,comp].isnull()).sum())
+
+    plotting_df = prep_epi_nlog10_pval_df.loc[:,comp].to_frame().rename(columns={comp:"nlog10_pval"})
     plotting_df = plotting_df.merge(epigenetic_meta_df, how="left", left_index=True, right_index=True)
     grouped_plotting_df = []
     for bi in plotting_df.biosample_id.unique():
         sub_plotting_df = plotting_df[plotting_df.biosample_id == bi]
-        grouped_plotting_df.append(sub_plotting_df.iloc[sub_plotting_df.pval.argmin()])
+        grouped_plotting_df.append(sub_plotting_df.iloc[sub_plotting_df.nlog10_pval.argmax()])
     grouped_plotting_df = pd.DataFrame(grouped_plotting_df).reset_index().drop("index", axis=1).set_index("biosample_id")
-    grouped_plotting_df = grouped_plotting_df.sort_values("zscore", ascending=False).iloc[:60]
+    grouped_plotting_df = grouped_plotting_df.sort_values("nlog10_pval", ascending=False).iloc[:60]
     bar_chart_general([abbreviate(l, max_len=30) for l in grouped_plotting_df.biosample_name.values],
-                      np.maximum(grouped_plotting_df.zscore.values, 0),
-                      ylabel="Z-score",
-                      hlines=[epi_marg_z,epi_bon_z])
+                      np.maximum(grouped_plotting_df.nlog10_pval.values, 0),
+                      config_dict["bar_nlog10_ylim"],
+                      ylabel="-log10 p-value",
+                      hlines=[marg_nlog10_pval,bon_nlog10_pval])
     plt.savefig(config_dict["out_prefix"] + "_raw_fig_dir/" + "{}.epi.jpeg".format(comp),
                 dpi=300, bbox_inches="tight")
     plt.close()
@@ -632,7 +657,7 @@ a4_height = 297
 
 pdf = FPDF('P', 'mm', 'A4')
 
-for comp in enrich_df.pvalue.columns:
+for comp in geneset_df.columns:
     pdf.add_page()
     pdf.set_margins(left=10, top=10, right=10)
     pdf.set_xy(10, 10)
@@ -684,3 +709,4 @@ for comp in enrich_df.pvalue.columns:
             pdf.multi_cell(w=0,h=4,align="L",txt=goi_gs_text,border=0)
 
 pdf.output(config_dict["out_prefix"] + '.pdf', 'F')
+

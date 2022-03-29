@@ -24,7 +24,7 @@ import itertools
 
 def get_args(argv=None):
     parser = argparse.ArgumentParser(description='...')
-    subparsers = parser.add_subparsers(help='Modes: pops_predict, cnmf_prepare, cnmf_factorize, cnmf_combine, cnmf_validate.', dest='mode')
+    subparsers = parser.add_subparsers(help='Modes: pops_predict, cnmf_prepare, cnmf_factorize, cnmf_combine, linear_enrichment, fisher_enrichment.', dest='mode')
     ### pops_predict arguments
     pops_predict_parser = subparsers.add_parser('pops_predict', help="...")
     pops_predict_parser.add_argument("--gene_annot_path", help="...")
@@ -84,6 +84,7 @@ def get_args(argv=None):
     cnmf_prepare_parser.add_argument("--random_seed", type=int, default=42, help="...")
     cnmf_prepare_parser.add_argument('--verbose', dest='verbose', action='store_true')
     cnmf_prepare_parser.add_argument('--no_verbose', dest='verbose', action='store_false')
+    cnmf_prepare_parser.set_defaults(verbose=False)
     ### cnmf_factorize arguments
     cnmf_factorize_parser = subparsers.add_parser('cnmf_factorize', help="...")
     cnmf_factorize_parser.add_argument("--out_dir", help="...")
@@ -91,6 +92,7 @@ def get_args(argv=None):
     cnmf_factorize_parser.add_argument("--worker_index", type=int, default=0, help="...")
     cnmf_factorize_parser.add_argument('--verbose', dest='verbose', action='store_true')
     cnmf_factorize_parser.add_argument('--no_verbose', dest='verbose', action='store_false')
+    cnmf_factorize_parser.set_defaults(verbose=False)
     ### cnmf_combine arguments
     cnmf_combine_parser = subparsers.add_parser('cnmf_combine', help="...")
     cnmf_combine_parser.add_argument("--out_dir", help="...")
@@ -98,21 +100,31 @@ def get_args(argv=None):
     cnmf_combine_parser.add_argument("--local_neighborhood_size", type=float, default=0.3, help="...")
     cnmf_combine_parser.add_argument("--percentage_trim", type=float, default=0.1, help="...")
     cnmf_combine_parser.add_argument("--gene_set_max_size", type=int, default=300, help="...")
-    cnmf_combine_parser.add_argument("--gene_set_min_size", type=int, default=20, help="...")
+    cnmf_combine_parser.add_argument("--gene_set_min_size", type=int, default=50, help="...")
     cnmf_combine_parser.add_argument("--random_seed", type=int, default=42, help="...")
     cnmf_combine_parser.add_argument('--verbose', dest='verbose', action='store_true')
     cnmf_combine_parser.add_argument('--no_verbose', dest='verbose', action='store_false')
-    ### cnmf_validate arguments
-    cnmf_validate_parser = subparsers.add_parser('cnmf_validate', help="...")
-    cnmf_validate_parser.add_argument("--usage_path", help="...")
-    cnmf_validate_parser.add_argument("--pops_out_prefix", help="...")
-    cnmf_validate_parser.add_argument("--gene_covariates_path", help="...")
-    cnmf_validate_parser.add_argument("--custom_covariate_table", help="...")
-    cnmf_validate_parser.add_argument("--validation_table_path", help="...")
-    cnmf_validate_parser.add_argument("--validation_errors_path", help="...")
-    cnmf_validate_parser.add_argument("--save_path", help="...")
-    cnmf_validate_parser.add_argument('--verbose', dest='verbose', action='store_true')
-    cnmf_validate_parser.add_argument('--no_verbose', dest='verbose', action='store_false')
+    cnmf_combine_parser.set_defaults(verbose=False)
+    ### linear_enrichment arguments
+    linear_enrichment_parser = subparsers.add_parser('linear_enrichment', help="...")
+    linear_enrichment_parser.add_argument("--usage_path", help="...")
+    linear_enrichment_parser.add_argument("--pops_out_prefix", help="...")
+    linear_enrichment_parser.add_argument("--gene_covariates_path", help="...")
+    linear_enrichment_parser.add_argument("--custom_covariate_table", help="...")
+    linear_enrichment_parser.add_argument("--validation_table_path", help="...")
+    linear_enrichment_parser.add_argument("--cov_type_table_path", help="...")
+    linear_enrichment_parser.add_argument("--save_path", help="...")
+    linear_enrichment_parser.add_argument('--verbose', dest='verbose', action='store_true')
+    linear_enrichment_parser.add_argument('--no_verbose', dest='verbose', action='store_false')
+    linear_enrichment_parser.set_defaults(verbose=False)
+    ### fisher_enrichment arguments
+    fisher_enrichment_parser = subparsers.add_parser('fisher_enrichment', help="...")
+    fisher_enrichment_parser.add_argument("--geneset_path", help="...")
+    fisher_enrichment_parser.add_argument("--validation_table_path", help="...")
+    fisher_enrichment_parser.add_argument("--save_path", help="...")
+    fisher_enrichment_parser.add_argument('--verbose', dest='verbose', action='store_true')
+    fisher_enrichment_parser.add_argument('--no_verbose', dest='verbose', action='store_false')
+    fisher_enrichment_parser.set_defaults(verbose=False)
     return parser.parse_args(argv)
 
 ### --------------------------------- GENERAL --------------------------------- ###
@@ -806,34 +818,69 @@ def binarize_components(usage_df, max_size, min_size):
 def add_intercept(df):
     intercept_col = ((df == df.min()) | (df == df.max())).all(axis=0)
     if not intercept_col.any():
-        assert "INTERCEPT" not in df.columns, "Column named INTERCEPT but not intercept detected."
+        assert "INTERCEPT" not in df.columns, "Column named INTERCEPT but no intercept detected."
         new_df = df.copy()
         new_df["INTERCEPT"] = 1.
         return new_df
     return df
 
 
-def compute_enrichments(usage_df, val_df, cov_df=None, err_df=None):
+def compute_enrichments(usage_df, val_df, cov_df=None, cov_type_df=None):
     if cov_df is None:
         cov_df = pd.DataFrame(index=val_df.index)
         cov_df["INTERCEPT"] = 1.
     cov_df = add_intercept(cov_df)
-    if err_df is None:
-        err_df = val_df.copy()
-        err_df[:] = 1.
+    if cov_type_df is None:
+        cov_type_df = pd.DataFrame([[np.nan] * val_df.shape[1]]).T
+        cov_type_df.columns = ["cov_type"]
+        cov_type_df.index = val_df.columns
+    assert (usage_df.index == val_df.index).all(), "Usage and validation indices don't match"
+    assert (usage_df.index == cov_df.index).all(), "Usage and covariate indices don't match"
     multicol = pd.MultiIndex.from_tuples(itertools.product(["coef", "se", "pvalue"], usage_df.columns),
                                          names=["statistic", "trait"])
     enrich_df = pd.DataFrame(columns=multicol, index=val_df.columns)
-    for t in val_df.columns:
-        for c in usage_df.columns:
-            X_C = np.hstack((usage_df.loc[:,[c]].values, cov_df.values))
-            results = sm.WLS(val_df.loc[:,t].values, X_C, weights=1./err_df.loc[:,t].values).fit()
-            if not np.isclose(results.params[0], 0):
-                enrich_df.loc[t, ("coef", c)] = results.params[0]
-                enrich_df.loc[t, ("se", c)] = results.bse[0]
-                enrich_df.loc[t, ("pvalue", c)] = 1 - scipy.stats.t.cdf(results.tvalues[0], df=results.df_resid)
-    enrich_df = enrich_df.astype(np.float64)
+    for c in usage_df.columns:
+        for t in val_df.columns:
+            y = val_df.loc[:,t].values
+            X = np.hstack((usage_df.loc[:,[c]].values, cov_df.values))
+            if pd.isnull(cov_type_df.loc[t].cov_type):
+                results = sm.OLS(y, X).fit()
+            else:
+                results = sm.OLS(y, X).fit(cov_type=cov_type_df.loc[t].cov_type)
+            if np.isclose(results.params[0], 0):
+                continue
+            enrich_df.loc[t,("coef",c)] = results.params[0]
+            enrich_df.loc[t,("se",c)] = results.bse[0]
+            enrich_df.loc[t,("pvalue",c)] = scipy.stats.t.sf(results.params[0] / results.bse[0], results.df_resid)
     return enrich_df
+
+
+def batch_one_sided_fisher_exact_test(X_df, Y_df):
+    ### Check that tables are binary
+    assert ((X_df == 0) | (X_df == 1)).all().all(), "X_df must be binary"
+    assert ((Y_df == 0) | (Y_df == 1)).all().all(), "Y_df must be binary"
+    ### Convert to float for faster math operations
+    X_df = X_df.astype(np.float64)
+    Y_df = Y_df.astype(np.float64)
+    ### Construct contingency table values
+    cont11 = X_df.T.dot(Y_df)
+    cont10 = X_df.T.dot(1 - Y_df)
+    cont01 = (1 - X_df).T.dot(Y_df)
+    cont00 = (1 - X_df).T.dot(1 - Y_df)
+    ### Compute test values
+    odds_ratios = (cont11 * cont00) / (cont10 * cont01)
+    fet_pval = scipy.stats.hypergeom.sf(cont11 - 1,
+                                        cont11 + cont10 + cont01 + cont00,
+                                        cont11 + cont10,
+                                        cont11 + cont01)
+    fet_pval = pd.DataFrame(fet_pval, index=cont11.index, columns=cont11.columns)
+    ### Combine into one dataframe
+    multicol = pd.MultiIndex.from_tuples(itertools.product(["odds_ratio", "pvalue"], X_df.columns),
+                                         names=["statistic", "trait"])
+    combined_df = pd.DataFrame(columns=multicol, index=Y_df.columns)
+    combined_df.odds_ratio = odds_ratios.T
+    combined_df.pvalue = fet_pval.T
+    return combined_df
 
 ### --------------------------------- MAIN --------------------------------- ###
 
@@ -1265,7 +1312,7 @@ def cnmf_combine_main(config_dict):
     jaccard_df.to_csv(config_dict["out_dir"] + "/" + config_dict["name"] + "/" + config_dict["name"] + ".geneset_sim", sep="\t")
 
 
-def cnmf_validate_main(config_dict):
+def linear_enrichment_main(config_dict):
     ### --------------------------------- Basic settings --------------------------------- ###
     ### Set logging settings
     if config_dict["verbose"]:
@@ -1277,7 +1324,7 @@ def cnmf_validate_main(config_dict):
     ### Display configs
     logging.info("Config dict = {}".format(str(config_dict)))
 
-    ### --------------------------------- Validate --------------------------------- ###
+    ### --------------------------------- Linear enrichment --------------------------------- ###
     ### Load data, check types, and process
     logging.info("Loading data from {} and {}".format(config_dict["usage_path"], config_dict["validation_table_path"]))
     usage_df = pd.read_csv(config_dict["usage_path"], sep="\t", index_col=0).astype(np.float64)
@@ -1286,16 +1333,6 @@ def cnmf_validate_main(config_dict):
     assert set(validation_df.index.values).issubset(usage_df.index.values), "Validation table cannot contain genes which don't appear in {}".format(config_dict["usage_path"])
     genes_to_use = validation_df.index.values
     sub_usage_df = usage_df.loc[genes_to_use]
-
-    ### Read and process error variance table
-    if config_dict["validation_errors_path"] is not None:
-        logging.info("Reading error variance from {}".format(config_dict["validation_errors_path"]))
-        err_df = pd.read_csv(config_dict["validation_errors_path"], sep="\t", index_col=0)
-        assert (err_df.index == validation_df.index).all(), "Indices of error table and validation table don't match"
-        assert (err_df.columns == validation_df.columns).all(), "Columns of error table and validation table don't match"
-    else:
-        logging.info("No error variance provided.")
-        err_df = None
 
     ### Read and process covariate table
     if config_dict["pops_out_prefix"] is not None or config_dict["gene_covariates_path"] is not None:
@@ -1324,10 +1361,49 @@ def cnmf_validate_main(config_dict):
     else:
         logging.info("No covariates provided.")
         covariate_df = None
+        
+    ### Read cov type table if provided
+    if config_dict["cov_type_table_path"] is not None:
+        logging.info("Reading cov_type table from {}".format(config_dict["cov_type_table_path"]))
+        cov_type_df = pd.read_csv(config_dict["cov_type_table_path"], sep="\t", index_col=0)
+        assert (cov_type_df.shape[1] == 1) and (cov_type_df.columns[0] == "cov_type"), "Other than the index, cov type table must have one column named cov_type"
+    else:
+        logging.info("No cov_type table provided.")
+        cov_type_df = None
+    
+    ### Standardize X and Y
+    logging.info("Centering and scaling X and Y")
+    sub_usage_df = (sub_usage_df - sub_usage_df.mean()) / sub_usage_df.std()
+    validation_df = (validation_df - validation_df.mean()) / validation_df.std()
+
+    ### Compute and save enrichments
+    logging.info("Computing and saving enrichments")
+    enrich_df = compute_enrichments(sub_usage_df, validation_df, cov_df=covariate_df, cov_type_df=cov_type_df)
+    enrich_df.to_csv(config_dict["save_path"], sep="\t")
+
+    
+def fisher_enrichment_main(config_dict):
+    ### --------------------------------- Basic settings --------------------------------- ###
+    ### Set logging settings
+    if config_dict["verbose"]:
+        logging.basicConfig(format="%(levelname)s: %(message)s", level=logging.DEBUG)
+        logging.info("Verbose output enabled.")
+    else:
+        logging.basicConfig(format="%(levelname)s: %(message)s")
+
+    ### Display configs
+    logging.info("Config dict = {}".format(str(config_dict)))
+    
+    ### --------------------------------- Fisher enrichment --------------------------------- ###
+    logging.info("Loading data from {} and {}".format(config_dict["geneset_path"], config_dict["validation_table_path"]))
+    geneset_df = pd.read_csv(config_dict["geneset_path"], sep="\t", index_col=0)
+    validation_set_df = pd.read_csv(config_dict["validation_table_path"], sep="\t", index_col=0)
+    ### Subset and reorder to genes in validation_set_df
+    geneset_df = geneset_df.loc[validation_set_df.index]
     
     ### Compute and save enrichments
     logging.info("Computing and saving enrichments")
-    enrich_df = compute_enrichments(sub_usage_df, validation_df, cov_df=covariate_df, err_df=err_df)
+    enrich_df = batch_one_sided_fisher_exact_test(geneset_df, validation_set_df)
     enrich_df.to_csv(config_dict["save_path"], sep="\t")
 
 
@@ -1344,7 +1420,9 @@ if __name__ == '__main__':
         cnmf_factorize_main(config_dict)
     elif config_dict["mode"] == "cnmf_combine":
         cnmf_combine_main(config_dict)
-    elif config_dict["mode"] == "cnmf_validate":
-        cnmf_validate_main(config_dict)
+    elif config_dict["mode"] == "linear_enrichment":
+        linear_enrichment_main(config_dict)
+    elif config_dict["mode"] == "fisher_enrichment":
+        fisher_enrichment_main(config_dict)
     else:
-        raise ValueError("Program mode must be either pops_predict, cnmf_prepare, cnmf_factorize, cnmf_combine, or cnmf_validate.")
+        raise ValueError("Program mode must be either pops_predict, cnmf_prepare, cnmf_factorize, cnmf_combine, linear_enrichment, or fisher_enrichment.")
