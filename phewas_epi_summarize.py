@@ -45,9 +45,9 @@ def prep_nlog_pval(nlog_pval, scores, effective_infinity):
     max_meaningful_val = all_vals.max()
     new_effective_infinity = max(effective_infinity, max_meaningful_val + 1)
     shifted_scores = scores - scores.min().min() + 1
-    prep_nlog_pval = nlog_pval.replace(np.inf, new_effective_infinity)
-    prep_nlog_pval = prep_nlog_pval + np.isinf(nlog_pval) * shifted_scores
-    return prep_nlog_pval, max_meaningful_val
+    shifted_nlog_pval = nlog_pval.replace(np.inf, new_effective_infinity)
+    shifted_nlog_pval = shifted_nlog_pval + np.isinf(nlog_pval) * shifted_scores
+    return shifted_nlog_pval, max_meaningful_val
 
 def bar_chart_general(labels, values, max_value, ylabel=None, hlines=None, groups=None, group_color_dict=None, legend_mask=0):
     fig, ax = plt.subplots(1,1,figsize=(20,4))
