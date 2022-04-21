@@ -121,6 +121,9 @@ def get_args(argv=None):
     fisher_enrichment_parser = subparsers.add_parser('fisher_enrichment', help="...")
     fisher_enrichment_parser.add_argument("--geneset_path", help="...")
     fisher_enrichment_parser.add_argument("--validation_table_path", help="...")
+    fisher_enrichment_parser.add_argument('--use_genesets_as_bg', dest='use_genesets_as_bg', action='store_true')
+    fisher_enrichment_parser.add_argument('--no_use_genesets_as_bg', dest='use_genesets_as_bg', action='store_false')
+    fisher_enrichment_parser.set_defaults(use_genesets_as_bg=True)
     fisher_enrichment_parser.add_argument("--save_path", help="...")
     fisher_enrichment_parser.add_argument('--verbose', dest='verbose', action='store_true')
     fisher_enrichment_parser.add_argument('--no_verbose', dest='verbose', action='store_false')
@@ -1398,8 +1401,19 @@ def fisher_enrichment_main(config_dict):
     logging.info("Loading data from {} and {}".format(config_dict["geneset_path"], config_dict["validation_table_path"]))
     geneset_df = pd.read_csv(config_dict["geneset_path"], sep="\t", index_col=0)
     validation_set_df = pd.read_csv(config_dict["validation_table_path"], sep="\t", index_col=0)
-    ### Subset and reorder to genes in validation_set_df
-    geneset_df = geneset_df.loc[validation_set_df.index]
+    ### Check that tables are binary
+    assert ((geneset_df == 0) | (geneset_df == 1)).all().all(), "geneset_path must point to binary table"
+    assert ((validation_set_df == 0) | (validation_set_df == 1)).all().all(), "validation_table_path must point to binary table"
+    ### Get validation genes
+    validation_genes = validation_set_df.index.values
+    if config_dict["use_genesets_as_bg"]:
+        logging.info("Using gene sets in geneset_path as background genes for Fisher exact test")
+        geneset_bg = geneset_df.index.values[(geneset_df == 1).any(axis=1)]
+        validation_genes = np.array(sorted(list(set(validation_genes).intersection(geneset_bg))))
+    logging.info("Using {} for genes validation".format(len(validation_genes)))
+    ### Subset and reorder to validation_genes
+    geneset_df = geneset_df.loc[validation_genes]
+    validation_set_df = validation_set_df.loc[validation_genes]
     
     ### Compute and save enrichments
     logging.info("Computing and saving enrichments")
