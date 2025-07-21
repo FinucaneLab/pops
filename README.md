@@ -6,7 +6,7 @@ Weeks, E. M. et al. [Leveraging polygenic enrichments of gene features to predic
 
 Detailed below is an example workflow for running PoPS with a reduced set of features on a set of publicly available summary statistics for schizophrenia. Step 0 preprocesses the feature matrix and must be run once; it only needs to be rerun if the feature matrix changes.
 
-To download the full set of feature files used to generate the results in the manuscript, please see [TODO: ADD LINK].
+To download the full set of feature files used to generate the results in the manuscript, please use [this dropbox link](https://www.dropbox.com/scl/fo/ne7xhxkt4dwhvd52a59ub/AFKkJu7ACaun1uuE99kmTkc/data/PoPS.features.txt.gz?rlkey=ltdbcld1enyr1zefg1lfqm61i&dl=0).
 
 ## Step 0: Munge features
 
