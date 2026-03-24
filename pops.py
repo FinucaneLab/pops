@@ -91,14 +91,14 @@ def get_indices_in_target_order(ref_list, target_names):
 ### --------------------------------- READING DATA --------------------------------- ###
 
 def read_gene_annot_df(gene_annot_path):
-    gene_annot_df = pd.read_csv(gene_annot_path, delim_whitespace=True).set_index("ENSGID")
+    gene_annot_df = pd.read_csv(gene_annot_path, sep='\s+').set_index("ENSGID")
     gene_annot_df["CHR"] = gene_annot_df["CHR"].astype(str)
     return gene_annot_df
 
 
 def read_magma(magma_prefix, use_magma_covariates, use_magma_error_cov):
     ### Get Y and Y_ids
-    magma_df = pd.read_csv(magma_prefix + ".genes.out", delim_whitespace=True)
+    magma_df = pd.read_csv(magma_prefix + ".genes.out", sep='\s+')
     Y = magma_df.ZSTAT.values
     Y_ids = magma_df.GENE.values
     if use_magma_covariates is not None or use_magma_error_cov is not None:
